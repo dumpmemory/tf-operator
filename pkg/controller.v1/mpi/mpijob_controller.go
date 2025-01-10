@@ -17,6 +17,7 @@ package mpi
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"reflect"
 	"sort"
@@ -28,7 +29,7 @@ import (
 	"github.com/sirupsen/logrus"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
-	"k8s.io/apimachinery/pkg/api/errors"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -37,7 +38,7 @@ import (
 	"k8s.io/client-go/informers"
 	kubeclientset "k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/record"
-	"k8s.io/klog"
+	"k8s.io/klog/v2"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
@@ -50,15 +51,14 @@ import (
 	schedulerpluginsv1alpha1 "sigs.k8s.io/scheduler-plugins/apis/scheduling/v1alpha1"
 	"volcano.sh/apis/pkg/apis/scheduling/v1beta1"
 
-	commonv1 "github.com/kubeflow/common/pkg/apis/common/v1"
-	"github.com/kubeflow/common/pkg/controller.v1/common"
-	"github.com/kubeflow/common/pkg/controller.v1/control"
-	"github.com/kubeflow/common/pkg/controller.v1/expectation"
-	commonutil "github.com/kubeflow/common/pkg/util"
 	kubeflowv1 "github.com/kubeflow/training-operator/pkg/apis/kubeflow.org/v1"
 	trainingoperatorcommon "github.com/kubeflow/training-operator/pkg/common"
 	"github.com/kubeflow/training-operator/pkg/common/util"
 	ctlrconfig "github.com/kubeflow/training-operator/pkg/config"
+	"github.com/kubeflow/training-operator/pkg/controller.v1/common"
+	"github.com/kubeflow/training-operator/pkg/controller.v1/control"
+	"github.com/kubeflow/training-operator/pkg/controller.v1/expectation"
+	commonutil "github.com/kubeflow/training-operator/pkg/util"
 )
 
 const (
@@ -86,7 +86,7 @@ func NewReconciler(mgr manager.Manager, gangSchedulingSetupFunc common.GangSched
 	r.JobController = common.JobController{
 		Controller:                  r,
 		Expectations:                expectation.NewControllerExpectations(),
-		WorkQueue:                   &util.FakeWorkQueue{},
+		WorkQueue:                   &util.FakeWorkQueue[string]{},
 		Recorder:                    r.recorder,
 		KubeClientSet:               kubeClientSet,
 		PriorityClassLister:         priorityClassInformer.Lister(),
@@ -110,14 +110,18 @@ type MPIJobReconciler struct {
 	Log       logr.Logger
 }
 
-//+kubebuilder:rbac:groups=kubeflow.org,resources=mpijobs,verbs=get;list;watch;create;update;patch;delete
-//+kubebuilder:rbac:groups=kubeflow.org,resources=mpijobs/status,verbs=get;update;patch
-//+kubebuilder:rbac:groups=kubeflow.org,resources=mpijobs/finalizers,verbs=update
-//+kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch;create;update;patch;delete
-//+kubebuilder:rbac:groups="",resources=serviceaccount,verbs=get;list;watch;create;delete
-//+kubebuilder:rbac:groups="",resources=configmaps,verbs=get;list;watch;create;update;patch;delete
-//+kubebuilder:rbac:groups="rbac.authorization.k8s.io",resources=roles,verbs=get;list;watch;create;delete;update
-//+kubebuilder:rbac:groups="rbac.authorization.k8s.io",resources=rolebindings,verbs=get;list;watch;create;delete
+// +kubebuilder:rbac:groups=kubeflow.org,resources=mpijobs,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=kubeflow.org,resources=mpijobs/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=kubeflow.org,resources=mpijobs/finalizers,verbs=update
+// +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups="",resources=serviceaccounts,verbs=get;list;watch;create
+// +kubebuilder:rbac:groups="",resources=configmaps,verbs=list;watch;create;update
+// +kubebuilder:rbac:groups="rbac.authorization.k8s.io",resources=roles,verbs=list;watch;create;update
+// +kubebuilder:rbac:groups="rbac.authorization.k8s.io",resources=rolebindings,verbs=list;watch;create;update
+// +kubebuilder:rbac:groups="",resources=pods/exec,verbs=create
+// +kubebuilder:rbac:groups=scheduling.volcano.sh,resources=podgroups,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=scheduling.x-k8s.io,resources=podgroups,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups="",resources=events,verbs=get;list;watch;create;update;patch;delete
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
@@ -132,9 +136,15 @@ func (jc *MPIJobReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
+	if manager := jc.ManagedByExternalController(mpijob.Spec.RunPolicy.ManagedBy); manager != nil {
+		logger.Info("Skipping MPIJob managed by a custom controller", "managed-by", manager)
+		return ctrl.Result{}, nil
+	}
+
 	if err = kubeflowv1.ValidateV1MpiJobSpec(&mpijob.Spec); err != nil {
 		logger.Error(err, "MPIJob failed validation")
-		jc.Recorder.Eventf(mpijob, corev1.EventTypeWarning, commonutil.JobFailedValidationReason, "MPIJob failed validation because %s", err)
+		jc.Recorder.Eventf(mpijob, corev1.EventTypeWarning, commonutil.NewReason(kubeflowv1.MPIJobKind, commonutil.JobFailedValidationReason),
+			"MPIJob failed validation because %s", err)
 		return ctrl.Result{}, err
 	}
 
@@ -182,92 +192,66 @@ func (jc *MPIJobReconciler) SetupWithManager(mgr ctrl.Manager, controllerThreads
 		Reconciler:              jc,
 		MaxConcurrentReconciles: controllerThreads,
 	})
-
 	if err != nil {
 		return err
 	}
-
 	// using onOwnerCreateFunc is easier to set defaults
-	if err = c.Watch(&source.Kind{Type: &kubeflowv1.MPIJob{}}, &handler.EnqueueRequestForObject{},
-		predicate.Funcs{CreateFunc: jc.onOwnerCreateFunc()},
+	if err = c.Watch(source.Kind[*kubeflowv1.MPIJob](mgr.GetCache(), &kubeflowv1.MPIJob{},
+		&handler.TypedEnqueueRequestForObject[*kubeflowv1.MPIJob]{},
+		predicate.TypedFuncs[*kubeflowv1.MPIJob]{CreateFunc: jc.onOwnerCreateFunc()}),
 	); err != nil {
 		return err
 	}
-
 	// inject watching for job related pod
-	if err = c.Watch(&source.Kind{Type: &corev1.Pod{}}, &handler.EnqueueRequestForOwner{
-		IsController: true,
-		OwnerType:    &kubeflowv1.MPIJob{},
-	}, predicate.Funcs{
-		CreateFunc: util.OnDependentCreateFunc(jc.Expectations),
-		UpdateFunc: util.OnDependentUpdateFunc(&jc.JobController),
-		DeleteFunc: util.OnDependentDeleteFunc(jc.Expectations),
-	}); err != nil {
+	if err = c.Watch(source.Kind[*corev1.Pod](mgr.GetCache(), &corev1.Pod{},
+		handler.TypedEnqueueRequestForOwner[*corev1.Pod](mgr.GetScheme(), mgr.GetRESTMapper(), &kubeflowv1.MPIJob{}, handler.OnlyControllerOwner()),
+		util.OnDependentFuncs[*corev1.Pod](jc.Scheme, jc.Expectations, &jc.JobController))); err != nil {
 		return err
 	}
-
-	// Create generic predicates
-	predicates := predicate.Funcs{
-		CreateFunc: util.OnDependentCreateFuncGeneric(jc.Expectations),
-		UpdateFunc: util.OnDependentUpdateFuncGeneric(&jc.JobController),
-		DeleteFunc: util.OnDependentDeleteFuncGeneric(jc.Expectations),
-	}
-
 	// inject watching for job related ConfigMap
-	if err = c.Watch(&source.Kind{Type: &corev1.ConfigMap{}}, &handler.EnqueueRequestForOwner{
-		IsController: true,
-		OwnerType:    &kubeflowv1.MPIJob{},
-	}, predicates); err != nil {
+	if err = c.Watch(source.Kind[*corev1.ConfigMap](mgr.GetCache(), &corev1.ConfigMap{},
+		handler.TypedEnqueueRequestForOwner[*corev1.ConfigMap](mgr.GetScheme(), mgr.GetRESTMapper(), &kubeflowv1.MPIJob{}, handler.OnlyControllerOwner()),
+		util.OnDependentFuncs[*corev1.ConfigMap](jc.Scheme, jc.Expectations, &jc.JobController))); err != nil {
 		return err
 	}
-
 	// inject watching for job related Role
-	if err = c.Watch(&source.Kind{Type: &rbacv1.Role{}}, &handler.EnqueueRequestForOwner{
-		IsController: true,
-		OwnerType:    &kubeflowv1.MPIJob{},
-	}, predicates); err != nil {
+	if err = c.Watch(source.Kind[*rbacv1.Role](mgr.GetCache(), &rbacv1.Role{},
+		handler.TypedEnqueueRequestForOwner[*rbacv1.Role](mgr.GetScheme(), mgr.GetRESTMapper(), &kubeflowv1.MPIJob{}, handler.OnlyControllerOwner()),
+		util.OnDependentFuncs[*rbacv1.Role](jc.Scheme, jc.Expectations, &jc.JobController))); err != nil {
 		return err
 	}
-
 	// inject watching for job related RoleBinding
-	if err = c.Watch(&source.Kind{Type: &rbacv1.RoleBinding{}}, &handler.EnqueueRequestForOwner{
-		IsController: true,
-		OwnerType:    &kubeflowv1.MPIJob{},
-	}, predicates); err != nil {
+	if err = c.Watch(source.Kind[*rbacv1.RoleBinding](mgr.GetCache(), &rbacv1.RoleBinding{},
+		handler.TypedEnqueueRequestForOwner[*rbacv1.RoleBinding](mgr.GetScheme(), mgr.GetRESTMapper(), &kubeflowv1.MPIJob{}, handler.OnlyControllerOwner()),
+		util.OnDependentFuncs[*rbacv1.RoleBinding](jc.Scheme, jc.Expectations, &jc.JobController))); err != nil {
 		return err
 	}
-
 	// inject watching for job related ServiceAccount
-	if err = c.Watch(&source.Kind{Type: &corev1.ServiceAccount{}}, &handler.EnqueueRequestForOwner{
-		IsController: true,
-		OwnerType:    &kubeflowv1.MPIJob{},
-	}, predicates); err != nil {
+	if err = c.Watch(source.Kind[*corev1.ServiceAccount](mgr.GetCache(), &corev1.ServiceAccount{},
+		handler.TypedEnqueueRequestForOwner[*corev1.ServiceAccount](mgr.GetScheme(), mgr.GetRESTMapper(), &kubeflowv1.MPIJob{}, handler.OnlyControllerOwner()),
+		util.OnDependentFuncs[*corev1.ServiceAccount](jc.Scheme, jc.Expectations, &jc.JobController))); err != nil {
 		return err
 	}
-
 	// skip watching volcano PodGroup if volcano PodGroup is not installed
-	_, err = mgr.GetRESTMapper().RESTMapping(schema.GroupKind{Group: v1beta1.SchemeGroupVersion.Group, Kind: "PodGroup"},
-		v1beta1.SchemeGroupVersion.Version)
-	if err == nil {
+	if _, err = mgr.GetRESTMapper().RESTMapping(schema.GroupKind{Group: v1beta1.GroupName, Kind: "PodGroup"},
+		v1beta1.SchemeGroupVersion.Version,
+	); err == nil {
 		// inject watching for job related volcano PodGroup
-		if err = c.Watch(&source.Kind{Type: &v1beta1.PodGroup{}}, &handler.EnqueueRequestForOwner{
-			IsController: true,
-			OwnerType:    &kubeflowv1.MPIJob{},
-		}, predicates); err != nil {
+		if err = c.Watch(source.Kind[*v1beta1.PodGroup](mgr.GetCache(), &v1beta1.PodGroup{},
+			handler.TypedEnqueueRequestForOwner[*v1beta1.PodGroup](mgr.GetScheme(), mgr.GetRESTMapper(), &kubeflowv1.MPIJob{}, handler.OnlyControllerOwner()),
+			util.OnDependentFuncs[*v1beta1.PodGroup](jc.Scheme, jc.Expectations, &jc.JobController))); err != nil {
 			return err
 		}
 	}
-
 	// skip watching scheduler-plugins PodGroup if scheduler-plugins PodGroup is not installed
-	_, err = mgr.GetRESTMapper().RESTMapping(
+	if _, err = mgr.GetRESTMapper().RESTMapping(
 		schema.GroupKind{Group: schedulerpluginsv1alpha1.SchemeGroupVersion.Group, Kind: "PodGroup"},
-		schedulerpluginsv1alpha1.SchemeGroupVersion.Version)
-	if err == nil {
+		schedulerpluginsv1alpha1.SchemeGroupVersion.Version,
+	); err == nil {
 		// inject watching for job related scheduler-plugins PodGroup
-		if err = c.Watch(&source.Kind{Type: &schedulerpluginsv1alpha1.PodGroup{}}, &handler.EnqueueRequestForOwner{
-			IsController: true,
-			OwnerType:    &kubeflowv1.MPIJob{},
-		}, predicates); err != nil {
+		if err = c.Watch(source.Kind[*schedulerpluginsv1alpha1.PodGroup](mgr.GetCache(), &schedulerpluginsv1alpha1.PodGroup{},
+			handler.TypedEnqueueRequestForOwner[*schedulerpluginsv1alpha1.PodGroup](mgr.GetScheme(), mgr.GetRESTMapper(), &kubeflowv1.MPIJob{}, handler.OnlyControllerOwner()),
+			util.OnDependentFuncs[*schedulerpluginsv1alpha1.PodGroup](jc.Scheme, jc.Expectations, &jc.JobController))); err != nil {
 			return err
 		}
 	}
@@ -279,8 +263,8 @@ func (jc *MPIJobReconciler) SetupWithManager(mgr ctrl.Manager, controllerThreads
 func (jc *MPIJobReconciler) ReconcileServices(
 	job metav1.Object,
 	services []*corev1.Service,
-	rtype commonv1.ReplicaType,
-	spec *commonv1.ReplicaSpec) error {
+	rtype kubeflowv1.ReplicaType,
+	spec *kubeflowv1.ReplicaSpec) error {
 	return nil
 }
 
@@ -300,6 +284,10 @@ func (jc *MPIJobReconciler) GetGroupNameLabelValue() string {
 	return kubeflowv1.GroupVersion.Group
 }
 
+func (jc *MPIJobReconciler) GetFrameworkName() string {
+	return kubeflowv1.MPIJobFrameworkName
+}
+
 // SetClusterSpec is overridden because no cluster spec is needed for MPIJob
 func (jc *MPIJobReconciler) SetClusterSpec(job interface{}, podTemplate *corev1.PodTemplateSpec, rtype, index string) error {
 	return nil
@@ -313,8 +301,8 @@ func (jc *MPIJobReconciler) GetDefaultContainerPortName() string {
 	return kubeflowv1.MPIJobDefaultPortName
 }
 
-func (jc *MPIJobReconciler) IsMasterRole(replicas map[commonv1.ReplicaType]*commonv1.ReplicaSpec,
-	rtype commonv1.ReplicaType, index int) bool {
+func (jc *MPIJobReconciler) IsMasterRole(replicas map[kubeflowv1.ReplicaType]*kubeflowv1.ReplicaSpec,
+	rtype kubeflowv1.ReplicaType, index int) bool {
 	return string(rtype) == string(kubeflowv1.MPIJobReplicaTypeLauncher)
 }
 
@@ -327,32 +315,25 @@ func (jc *MPIJobReconciler) GetJobFromInformerCache(namespace, name string) (met
 }
 
 // onOwnerCreateFunc modify creation condition.
-func (jc *MPIJobReconciler) onOwnerCreateFunc() func(event.CreateEvent) bool {
-	return func(e event.CreateEvent) bool {
-		mpiJob, ok := e.Object.(*kubeflowv1.MPIJob)
-		if !ok {
-			return true
-		}
-
+func (jc *MPIJobReconciler) onOwnerCreateFunc() func(createEvent event.TypedCreateEvent[*kubeflowv1.MPIJob]) bool {
+	return func(e event.TypedCreateEvent[*kubeflowv1.MPIJob]) bool {
+		mpiJob := e.Object
 		jc.Scheme.Default(mpiJob)
-		msg := fmt.Sprintf("MPIJob %s/%s is created.", mpiJob.Namespace, e.Object.GetName())
+		msg := fmt.Sprintf("MPIJob %s is created.", e.Object.GetName())
 		logrus.Info(msg)
-		trainingoperatorcommon.CreatedJobsCounterInc(mpiJob.Namespace, kubeflowv1.MPIJobFrameworkName)
-		if err := commonutil.UpdateJobConditions(&mpiJob.Status, commonv1.JobCreated, mpiJobCreatedReason, msg); err != nil {
-			log.Log.Error(err, "append job condition error")
-			return false
-		}
+		trainingoperatorcommon.CreatedJobsCounterInc(mpiJob.Namespace, jc.GetFrameworkName())
+		commonutil.UpdateJobConditions(&mpiJob.Status, kubeflowv1.JobCreated, corev1.ConditionTrue, commonutil.NewReason(kubeflowv1.MPIJobKind, commonutil.JobCreatedReason), msg)
 		return true
 	}
 }
 
 func (jc *MPIJobReconciler) ReconcilePods(
 	job interface{},
-	jobStatus *commonv1.JobStatus,
+	jobStatus *kubeflowv1.JobStatus,
 	pods []*corev1.Pod,
-	rtype commonv1.ReplicaType,
-	spec *commonv1.ReplicaSpec,
-	replicas map[commonv1.ReplicaType]*commonv1.ReplicaSpec,
+	rtype kubeflowv1.ReplicaType,
+	spec *kubeflowv1.ReplicaSpec,
+	replicas map[kubeflowv1.ReplicaType]*kubeflowv1.ReplicaSpec,
 ) error {
 
 	mpiJob, ok := job.(*kubeflowv1.MPIJob)
@@ -414,10 +395,10 @@ func (jc *MPIJobReconciler) ReconcilePods(
 		if launcher == nil {
 			launcher, err = jc.KubeClientSet.CoreV1().Pods(mpiJob.Namespace).Create(context.Background(), jc.newLauncher(mpiJob, ctlrconfig.Config.MPIKubectlDeliveryImage, isGPULauncher), metav1.CreateOptions{})
 			if err != nil {
-				jc.Recorder.Eventf(mpiJob, corev1.EventTypeWarning, mpiJobFailedReason, "launcher pod created failed: %v", err)
+				jc.Recorder.Eventf(mpiJob, corev1.EventTypeWarning, commonutil.NewReason(kubeflowv1.MPIJobKind, commonutil.JobFailedReason), "launcher pod created failed: %v", err)
 				return err
 			} else {
-				jc.Recorder.Eventf(mpiJob, corev1.EventTypeNormal, mpiJobRunningReason, "launcher pod created success: %v", launcher.Name)
+				jc.Recorder.Eventf(mpiJob, corev1.EventTypeNormal, commonutil.NewReason(kubeflowv1.MPIJobKind, commonutil.JobRunningReason), "launcher pod created success: %v", launcher.Name)
 			}
 		}
 	}
@@ -437,12 +418,12 @@ func (jc *MPIJobReconciler) updateMPIJobStatus(mpiJob *kubeflowv1.MPIJob, launch
 		if isPodSucceeded(launcher) {
 			mpiJob.Status.ReplicaStatuses[kubeflowv1.MPIJobReplicaTypeLauncher].Succeeded = 1
 			msg := fmt.Sprintf("MPIJob %s/%s successfully completed.", mpiJob.Namespace, mpiJob.Name)
-			jc.Recorder.Event(mpiJob, corev1.EventTypeNormal, mpiJobSucceededReason, msg)
+			jc.Recorder.Event(mpiJob, corev1.EventTypeNormal, commonutil.NewReason(kubeflowv1.MPIJobPlural, commonutil.JobSucceededReason), msg)
 			if mpiJob.Status.CompletionTime == nil {
 				now := metav1.Now()
 				mpiJob.Status.CompletionTime = &now
 			}
-			err := updateMPIJobConditions(mpiJob, commonv1.JobSucceeded, mpiJobSucceededReason, msg)
+			err := updateMPIJobConditions(mpiJob, kubeflowv1.JobSucceeded, commonutil.NewReason(kubeflowv1.MPIJobKind, commonutil.JobSucceededReason), msg)
 			if err != nil {
 				return err
 			}
@@ -451,7 +432,7 @@ func (jc *MPIJobReconciler) updateMPIJobStatus(mpiJob *kubeflowv1.MPIJob, launch
 			msg := fmt.Sprintf("MPIJob %s/%s has failed", mpiJob.Namespace, mpiJob.Name)
 			reason := launcher.Status.Reason
 			if reason == "" {
-				reason = mpiJobFailedReason
+				reason = commonutil.NewReason(kubeflowv1.MPIJobKind, commonutil.JobFailedReason)
 			}
 			jc.Recorder.Event(mpiJob, corev1.EventTypeWarning, reason, msg)
 			if reason == "Evicted" {
@@ -460,7 +441,7 @@ func (jc *MPIJobReconciler) updateMPIJobStatus(mpiJob *kubeflowv1.MPIJob, launch
 				now := metav1.Now()
 				mpiJob.Status.CompletionTime = &now
 			}
-			err := updateMPIJobConditions(mpiJob, commonv1.JobFailed, reason, msg)
+			err := updateMPIJobConditions(mpiJob, kubeflowv1.JobFailed, reason, msg)
 			if err != nil {
 				klog.Errorf("Append mpiJob(%s/%s) condition error: %v", mpiJob.Namespace, mpiJob.Name, err)
 				return err
@@ -493,7 +474,7 @@ func (jc *MPIJobReconciler) updateMPIJobStatus(mpiJob *kubeflowv1.MPIJob, launch
 	}
 	if evict > 0 {
 		msg := fmt.Sprintf("%d/%d workers are evicted", evict, len(worker))
-		if err := updateMPIJobConditions(mpiJob, commonv1.JobFailed, mpiJobEvict, msg); err != nil {
+		if err := updateMPIJobConditions(mpiJob, kubeflowv1.JobFailed, mpiJobEvict, msg); err != nil {
 			return err
 		}
 		jc.Recorder.Event(mpiJob, corev1.EventTypeWarning, mpiJobEvict, msg)
@@ -501,11 +482,11 @@ func (jc *MPIJobReconciler) updateMPIJobStatus(mpiJob *kubeflowv1.MPIJob, launch
 
 	if launcher != nil && launcher.Status.Phase == corev1.PodRunning && running == len(worker) {
 		msg := fmt.Sprintf("MPIJob %s/%s is running.", mpiJob.Namespace, mpiJob.Name)
-		err := updateMPIJobConditions(mpiJob, commonv1.JobRunning, mpiJobRunningReason, msg)
+		err := updateMPIJobConditions(mpiJob, kubeflowv1.JobRunning, commonutil.NewReason(kubeflowv1.MPIJobKind, commonutil.JobRunningReason), msg)
 		if err != nil {
 			return err
 		}
-		jc.Recorder.Eventf(mpiJob, corev1.EventTypeNormal, "MPIJobRunning", "MPIJob %s/%s is running", mpiJob.Namespace, mpiJob.Name)
+		jc.Recorder.Eventf(mpiJob, corev1.EventTypeNormal, commonutil.NewReason(kubeflowv1.MPIJobKind, commonutil.JobRunningReason), "MPIJob %s/%s is running", mpiJob.Namespace, mpiJob.Name)
 	}
 	return nil
 }
@@ -515,7 +496,7 @@ func (jc *MPIJobReconciler) GetJobFromAPIClient(namespace, name string) (metav1.
 
 	err := jc.apiReader.Get(context.Background(), types.NamespacedName{Namespace: namespace, Name: name}, job)
 	if err != nil {
-		if errors.IsNotFound(err) {
+		if apierrors.IsNotFound(err) {
 			logrus.Error(err, "MPIJob not found", "namespace", namespace, "name", name)
 		} else {
 			logrus.Error(err, "failed to get job from api-server", "namespace", namespace, "name", name)
@@ -551,11 +532,7 @@ func (jc *MPIJobReconciler) GetPodsForJob(jobObject interface{}) ([]*corev1.Pod,
 		return nil, err
 	}
 
-	var filter util.ObjectFilterFunction = func(obj metav1.Object) bool {
-		return metav1.IsControlledBy(obj, job)
-	}
-
-	return util.ConvertPodListWithFilter(podlist.Items, filter), nil
+	return util.JobControlledPodList(podlist.Items, job), nil
 }
 
 func (jc *MPIJobReconciler) DeleteJob(job interface{}) error {
@@ -573,7 +550,7 @@ func (jc *MPIJobReconciler) DeleteJob(job interface{}) error {
 
 	jc.Recorder.Eventf(mpiJob, corev1.EventTypeNormal, SuccessfulDeleteJobReason, "Deleted job: %v", mpiJob.Name)
 	log.Infof("job %s/%s has been deleted", mpiJob.Namespace, mpiJob.Name)
-	trainingoperatorcommon.DeletedJobsCounterInc(mpiJob.Namespace, kubeflowv1.MPIJobFrameworkName)
+	trainingoperatorcommon.DeletedJobsCounterInc(mpiJob.Namespace, jc.GetFrameworkName())
 	return nil
 }
 
@@ -584,7 +561,7 @@ func (jc *MPIJobReconciler) GetServicesForJob(jobObject interface{}) ([]*corev1.
 	return nil, nil
 }
 
-func (jc *MPIJobReconciler) UpdateJobStatus(job interface{}, replicas map[commonv1.ReplicaType]*commonv1.ReplicaSpec, jobStatus *commonv1.JobStatus) error {
+func (jc *MPIJobReconciler) UpdateJobStatus(job interface{}, replicas map[kubeflowv1.ReplicaType]*kubeflowv1.ReplicaSpec, jobStatus *kubeflowv1.JobStatus) error {
 	mpiJob, ok := job.(*kubeflowv1.MPIJob)
 	if !ok {
 		return fmt.Errorf("%+v is not a type of MPIJob", job)
@@ -604,53 +581,37 @@ func (jc *MPIJobReconciler) UpdateJobStatus(job interface{}, replicas map[common
 		if rtype == kubeflowv1.MPIJobReplicaTypeLauncher {
 			if running > 0 {
 				msg := fmt.Sprintf("MPIJob %s is running.", mpiJob.Name)
-				err := commonutil.UpdateJobConditions(jobStatus, commonv1.JobRunning, commonutil.JobRunningReason, msg)
-				if err != nil {
-					commonutil.LoggerForJob(mpiJob).Infof("Append job condition error: %v", err)
-					return err
-				}
+				commonutil.UpdateJobConditions(jobStatus, kubeflowv1.JobRunning, corev1.ConditionTrue, commonutil.NewReason(kubeflowv1.MPIJobKind, commonutil.JobRunningReason), msg)
 			}
 			// when launcher is succeed, the job is finished.
 			if expected == 0 {
 				msg := fmt.Sprintf("MPIJob %s is successfully completed.", mpiJob.Name)
 				logrus.Info(msg)
-				jc.Recorder.Event(mpiJob, corev1.EventTypeNormal, commonutil.JobSucceededReason, msg)
+				jc.Recorder.Event(mpiJob, corev1.EventTypeNormal, commonutil.NewReason(kubeflowv1.MPIJobKind, commonutil.JobSucceededReason), msg)
 				if jobStatus.CompletionTime == nil {
 					now := metav1.Now()
 					jobStatus.CompletionTime = &now
 				}
-				err := commonutil.UpdateJobConditions(jobStatus, commonv1.JobSucceeded, commonutil.JobSucceededReason, msg)
-				if err != nil {
-					commonutil.LoggerForJob(mpiJob).Infof("Append job condition error: %v", err)
-					return err
-				}
-				trainingoperatorcommon.SuccessfulJobsCounterInc(mpiJob.Namespace, kubeflowv1.MPIJobFrameworkName)
+				commonutil.UpdateJobConditions(jobStatus, kubeflowv1.JobSucceeded, corev1.ConditionTrue, commonutil.NewReason(kubeflowv1.MPIJobKind, commonutil.JobSucceededReason), msg)
+				trainingoperatorcommon.SuccessfulJobsCounterInc(mpiJob.Namespace, jc.GetFrameworkName())
 				return nil
 			}
 		}
 		if failed > 0 {
-			if spec.RestartPolicy == commonv1.RestartPolicyExitCode {
+			if spec.RestartPolicy == kubeflowv1.RestartPolicyExitCode {
 				msg := fmt.Sprintf("MPIJob %s is restarting because %d %s replica(s) failed.", mpiJob.Name, failed, rtype)
-				jc.Recorder.Event(mpiJob, corev1.EventTypeWarning, commonutil.JobRestartingReason, msg)
-				err := commonutil.UpdateJobConditions(jobStatus, commonv1.JobRestarting, commonutil.JobRestartingReason, msg)
-				if err != nil {
-					commonutil.LoggerForJob(mpiJob).Infof("Append job condition error: %v", err)
-					return err
-				}
-				trainingoperatorcommon.RestartedJobsCounterInc(mpiJob.Namespace, kubeflowv1.MPIJobFrameworkName)
+				jc.Recorder.Event(mpiJob, corev1.EventTypeWarning, commonutil.NewReason(kubeflowv1.MPIJobKind, commonutil.JobRestartingReason), msg)
+				commonutil.UpdateJobConditions(jobStatus, kubeflowv1.JobRestarting, corev1.ConditionTrue, commonutil.NewReason(kubeflowv1.MPIJobKind, commonutil.JobRestartingReason), msg)
+				trainingoperatorcommon.RestartedJobsCounterInc(mpiJob.Namespace, jc.GetFrameworkName())
 			} else {
 				msg := fmt.Sprintf("MPIJob %s is failed because %d %s replica(s) failed.", mpiJob.Name, failed, rtype)
-				jc.Recorder.Event(mpiJob, corev1.EventTypeNormal, commonutil.JobFailedReason, msg)
+				jc.Recorder.Event(mpiJob, corev1.EventTypeNormal, commonutil.NewReason(kubeflowv1.MPIJobKind, commonutil.JobFailedReason), msg)
 				if jobStatus.CompletionTime == nil {
 					now := metav1.Now()
 					jobStatus.CompletionTime = &now
 				}
-				err := commonutil.UpdateJobConditions(jobStatus, commonv1.JobFailed, commonutil.JobFailedReason, msg)
-				if err != nil {
-					commonutil.LoggerForJob(mpiJob).Infof("Append job condition error: %v", err)
-					return err
-				}
-				trainingoperatorcommon.FailedJobsCounterInc(mpiJob.Namespace, kubeflowv1.MPIJobFrameworkName)
+				commonutil.UpdateJobConditions(jobStatus, kubeflowv1.JobFailed, corev1.ConditionTrue, commonutil.NewReason(kubeflowv1.MPIJobKind, commonutil.NewReason(kubeflowv1.MPIJobKind, commonutil.JobFailedReason)), msg)
+				trainingoperatorcommon.FailedJobsCounterInc(mpiJob.Namespace, jc.GetFrameworkName())
 			}
 		}
 	}
@@ -658,9 +619,9 @@ func (jc *MPIJobReconciler) UpdateJobStatus(job interface{}, replicas map[common
 	return nil
 }
 
-func (jc *MPIJobReconciler) UpdateJobStatusInApiServer(job interface{}, jobStatus *commonv1.JobStatus) error {
+func (jc *MPIJobReconciler) UpdateJobStatusInApiServer(job interface{}, jobStatus *kubeflowv1.JobStatus) error {
 	if jobStatus.ReplicaStatuses == nil {
-		jobStatus.ReplicaStatuses = map[commonv1.ReplicaType]*commonv1.ReplicaStatus{}
+		jobStatus.ReplicaStatuses = map[kubeflowv1.ReplicaType]*kubeflowv1.ReplicaStatus{}
 	}
 
 	mpiJob, ok := job.(*kubeflowv1.MPIJob)
@@ -697,7 +658,7 @@ func (jc *MPIJobReconciler) getLauncherJob(mpiJob *kubeflowv1.MPIJob) (*corev1.P
 	launcher := &corev1.Pod{}
 	NamespacedName := types.NamespacedName{Namespace: mpiJob.Namespace, Name: mpiJob.Name + launcherSuffix}
 	err := jc.Get(context.Background(), NamespacedName, launcher)
-	if errors.IsNotFound(err) {
+	if apierrors.IsNotFound(err) {
 		return nil, nil
 	}
 	if err != nil {
@@ -712,7 +673,7 @@ func (jc *MPIJobReconciler) getLauncherJob(mpiJob *kubeflowv1.MPIJob) (*corev1.P
 	if !metav1.IsControlledBy(launcher, mpiJob) {
 		msg := fmt.Sprintf(MessageResourceExists, launcher.Name, launcher.Kind)
 		jc.Recorder.Event(mpiJob, corev1.EventTypeWarning, ErrResourceExists, msg)
-		return launcher, fmt.Errorf(msg)
+		return launcher, errors.New(msg)
 	}
 	return launcher, nil
 }
@@ -732,7 +693,7 @@ func (jc *MPIJobReconciler) getOrCreateConfigMap(mpiJob *kubeflowv1.MPIJob, work
 	err = jc.Get(context.Background(), NamespacedName, cm)
 
 	// If the ConfigMap doesn't exist, we'll create it.
-	if errors.IsNotFound(err) {
+	if apierrors.IsNotFound(err) {
 		cm, err = jc.KubeClientSet.CoreV1().ConfigMaps(mpiJob.Namespace).Create(context.Background(), newCM, metav1.CreateOptions{})
 	}
 	// If an error occurs during Get/Create, we'll requeue the item so we
@@ -747,7 +708,7 @@ func (jc *MPIJobReconciler) getOrCreateConfigMap(mpiJob *kubeflowv1.MPIJob, work
 	if !metav1.IsControlledBy(cm, mpiJob) {
 		msg := fmt.Sprintf(MessageResourceExists, cm.Name, cm.Kind)
 		jc.Recorder.Event(mpiJob, corev1.EventTypeWarning, ErrResourceExists, msg)
-		return nil, fmt.Errorf(msg)
+		return nil, errors.New(msg)
 	}
 
 	// If the ConfigMap is changed, update it
@@ -764,16 +725,21 @@ func (jc *MPIJobReconciler) getOrCreateConfigMap(mpiJob *kubeflowv1.MPIJob, work
 // getOrCreateLauncherServiceAccount gets the launcher ServiceAccount controlled
 // by this MPIJob, or creates one if it doesn't exist.
 func (jc *MPIJobReconciler) getOrCreateLauncherServiceAccount(mpiJob *kubeflowv1.MPIJob) (*corev1.ServiceAccount, error) {
+	saName := mpiJob.Spec.MPIReplicaSpecs[kubeflowv1.MPIJobReplicaTypeLauncher].Template.Spec.ServiceAccountName
+
+	if len(saName) == 0 {
+		saName = mpiJob.Name + launcherSuffix
+	}
 
 	sa := &corev1.ServiceAccount{}
-	NamespacedName := types.NamespacedName{Namespace: mpiJob.Namespace, Name: mpiJob.Name + launcherSuffix}
+	NamespacedName := types.NamespacedName{Namespace: mpiJob.Namespace, Name: saName}
 	err := jc.Get(context.Background(), NamespacedName, sa)
 
 	if err == nil {
 		jc.Recorder.Eventf(mpiJob, corev1.EventTypeNormal, "ServiceAccount is exist", "ServiceAccount: %v", sa.Name)
 	}
 
-	if errors.IsNotFound(err) {
+	if apierrors.IsNotFound(err) {
 		sa, err = jc.KubeClientSet.CoreV1().ServiceAccounts(mpiJob.Namespace).Create(context.Background(), newLauncherServiceAccount(mpiJob), metav1.CreateOptions{})
 	}
 	// If an error occurs during Get/Create, we'll requeue the item so we
@@ -781,13 +747,6 @@ func (jc *MPIJobReconciler) getOrCreateLauncherServiceAccount(mpiJob *kubeflowv1
 	// temporary network failure, or any other transient reason.
 	if err != nil {
 		return nil, err
-	}
-	// If the launcher ServiceAccount is not controlled by this MPIJob resource, we
-	// should log a warning to the event recorder and return.
-	if !metav1.IsControlledBy(sa, mpiJob) {
-		msg := fmt.Sprintf(MessageResourceExists, sa.Name, sa.Kind)
-		jc.Recorder.Event(mpiJob, corev1.EventTypeWarning, ErrResourceExists, msg)
-		return nil, fmt.Errorf(msg)
 	}
 
 	return sa, nil
@@ -805,7 +764,7 @@ func (jc *MPIJobReconciler) getOrCreateLauncherRole(mpiJob *kubeflowv1.MPIJob, w
 
 	launcherRole := newLauncherRole(mpiJob, workerReplicas)
 	// If the Role doesn't exist, we'll create it.
-	if errors.IsNotFound(err) {
+	if apierrors.IsNotFound(err) {
 		role, err = jc.KubeClientSet.RbacV1().Roles(mpiJob.Namespace).Create(context.Background(), launcherRole, metav1.CreateOptions{})
 	}
 	// If an error occurs during Get/Create, we'll requeue the item so we
@@ -819,7 +778,7 @@ func (jc *MPIJobReconciler) getOrCreateLauncherRole(mpiJob *kubeflowv1.MPIJob, w
 	if !metav1.IsControlledBy(role, mpiJob) {
 		msg := fmt.Sprintf(MessageResourceExists, role.Name, role.Kind)
 		jc.Recorder.Event(mpiJob, corev1.EventTypeWarning, ErrResourceExists, msg)
-		return nil, fmt.Errorf(msg)
+		return nil, errors.New(msg)
 	}
 
 	if !reflect.DeepEqual(role.Rules, launcherRole.Rules) {
@@ -844,7 +803,7 @@ func (jc *MPIJobReconciler) getLauncherRoleBinding(mpiJob *kubeflowv1.MPIJob) (*
 		jc.Recorder.Eventf(mpiJob, corev1.EventTypeNormal, "RoleBinding is exist", "RoleBinding: %v", rb.Name)
 	}
 
-	if errors.IsNotFound(err) {
+	if apierrors.IsNotFound(err) {
 		rb, err = jc.KubeClientSet.RbacV1().RoleBindings(mpiJob.Namespace).Create(context.Background(), newLauncherRoleBinding(mpiJob), metav1.CreateOptions{})
 	}
 	// If an error occurs during Get/Create, we'll requeue the item so we
@@ -858,7 +817,7 @@ func (jc *MPIJobReconciler) getLauncherRoleBinding(mpiJob *kubeflowv1.MPIJob) (*
 	if !metav1.IsControlledBy(rb, mpiJob) {
 		msg := fmt.Sprintf(MessageResourceExists, rb.Name, rb.Kind)
 		jc.Recorder.Event(mpiJob, corev1.EventTypeWarning, ErrResourceExists, msg)
-		return nil, fmt.Errorf(msg)
+		return nil, errors.New(msg)
 	}
 
 	return rb, nil
@@ -894,7 +853,7 @@ func (jc *MPIJobReconciler) getOrCreateWorker(mpiJob *kubeflowv1.MPIJob) ([]*cor
 	}
 	if len(podlist.Items) > int(*workerReplicas) {
 		for _, pod := range podlist.Items {
-			indexStr, ok := pod.Labels[commonv1.ReplicaIndexLabel]
+			indexStr, ok := pod.Labels[kubeflowv1.ReplicaIndexLabel]
 			if !ok {
 				return nil, err
 			}
@@ -918,16 +877,15 @@ func (jc *MPIJobReconciler) getOrCreateWorker(mpiJob *kubeflowv1.MPIJob) ([]*cor
 		err := jc.Get(context.Background(), NamespacedName, pod)
 
 		// If the worker Pod doesn't exist, we'll create it.
-		if errors.IsNotFound(err) {
+		if apierrors.IsNotFound(err) {
 			worker := jc.newWorker(mpiJob, name)
 			if worker == nil {
 				msg := fmt.Sprintf(MessageResourceDoesNotExist, "Worker")
 				jc.Recorder.Event(mpiJob, corev1.EventTypeWarning, ErrResourceDoesNotExist, msg)
-				err = fmt.Errorf(msg)
-				return nil, err
+				return nil, errors.New(msg)
 			}
 			// Insert ReplicaIndexLabel
-			worker.Labels[commonv1.ReplicaIndexLabel] = strconv.Itoa(int(i))
+			worker.Labels[kubeflowv1.ReplicaIndexLabel] = strconv.Itoa(int(i))
 			pod, err = jc.KubeClientSet.CoreV1().Pods(mpiJob.Namespace).Create(context.Background(), worker, metav1.CreateOptions{})
 			if err == nil {
 				jc.Recorder.Eventf(mpiJob, corev1.EventTypeNormal, "SuccessfulCreatePod", "Created worker pod: %v", pod.Name)
@@ -939,8 +897,9 @@ func (jc *MPIJobReconciler) getOrCreateWorker(mpiJob *kubeflowv1.MPIJob) ([]*cor
 		// If an error occurs during Get/Create, we'll requeue the item so we
 		// can attempt processing again later. This could have been caused by a
 		// temporary network failure, or any other transient reason.
-		if err != nil && !errors.IsNotFound(err) {
-			jc.Recorder.Eventf(mpiJob, corev1.EventTypeWarning, mpiJobFailedReason, "worker pod created failed: %v", err)
+		if err != nil && !apierrors.IsNotFound(err) {
+			jc.Recorder.Eventf(mpiJob, corev1.EventTypeWarning, commonutil.NewReason(kubeflowv1.MPIJobKind, commonutil.JobFailedReason),
+				"worker pod created failed: %v", err)
 			return nil, err
 		}
 		// If the worker is not controlled by this MPIJob resource, we should log
@@ -948,7 +907,7 @@ func (jc *MPIJobReconciler) getOrCreateWorker(mpiJob *kubeflowv1.MPIJob) ([]*cor
 		if pod != nil && !metav1.IsControlledBy(pod, mpiJob) {
 			msg := fmt.Sprintf(MessageResourceExists, pod.Name, pod.Kind)
 			jc.Recorder.Event(mpiJob, corev1.EventTypeWarning, ErrResourceExists, msg)
-			return nil, fmt.Errorf(msg)
+			return nil, errors.New(msg)
 		}
 		workerPods = append(workerPods, pod)
 	}
@@ -1024,9 +983,6 @@ func (jc *MPIJobReconciler) newWorker(mpiJob *kubeflowv1.MPIJob, name string) *c
 
 		rtWorker := strings.ToLower(string(kubeflowv1.MPIJobReplicaTypeWorker))
 		jc.PodGroupControl.DecoratePodTemplateSpec(podSpec, mpiJob, rtWorker)
-		if jc.PodGroupControl.GetSchedulerName() == "volcano" {
-			podSpec.Annotations[volcanoTaskSpecKey] = rtWorker
-		}
 	}
 
 	return &corev1.Pod{
@@ -1054,7 +1010,7 @@ func (jc *MPIJobReconciler) newLauncher(mpiJob *kubeflowv1.MPIJob, kubectlDelive
 
 	masterRole := jc.IsMasterRole(mpiJob.Spec.MPIReplicaSpecs, kubeflowv1.MPIJobReplicaTypeLauncher, 0)
 	if masterRole {
-		labels[commonv1.JobRoleLabel] = "master"
+		labels[kubeflowv1.JobRoleLabel] = "master"
 	}
 	podSpec := mpiJob.Spec.MPIReplicaSpecs[kubeflowv1.MPIJobReplicaTypeLauncher].Template.DeepCopy()
 	// copy the labels and annotations to pod from PodTemplate
@@ -1076,12 +1032,12 @@ func (jc *MPIJobReconciler) newLauncher(mpiJob *kubeflowv1.MPIJob, kubectlDelive
 
 		rt := strings.ToLower(string(kubeflowv1.MPIJobReplicaTypeLauncher))
 		jc.PodGroupControl.DecoratePodTemplateSpec(podSpec, mpiJob, rt)
-		if jc.PodGroupControl.GetSchedulerName() == "volcano" {
-			podSpec.Annotations[volcanoTaskSpecKey] = rt
-		}
 	}
 
-	podSpec.Spec.ServiceAccountName = launcherName
+	if len(mpiJob.Spec.MPIReplicaSpecs[kubeflowv1.MPIJobReplicaTypeLauncher].Template.Spec.ServiceAccountName) == 0 {
+		podSpec.Spec.ServiceAccountName = launcherName
+	}
+
 	podSpec.Spec.InitContainers = append(podSpec.Spec.InitContainers, corev1.Container{
 		Name:            kubectlDeliveryName,
 		Image:           kubectlDeliveryImage,
@@ -1150,6 +1106,25 @@ func (jc *MPIJobReconciler) newLauncher(mpiJob *kubeflowv1.MPIJob, kubectlDelive
 				Name:  "NVIDIA_DRIVER_CAPABILITIES",
 				Value: "",
 			})
+	}
+
+	// Add default Intel MPI bootstrap variables if not provided by the user.
+	bootstrap, exec := hasIntelMPIBootstrapValues(container.Env)
+	if !bootstrap {
+		container.Env = append(container.Env,
+			corev1.EnvVar{
+				Name:  "I_MPI_HYDRA_BOOTSTRAP",
+				Value: iMPIDefaultBootstrap,
+			},
+		)
+	}
+	if !exec {
+		container.Env = append(container.Env,
+			corev1.EnvVar{
+				Name:  "I_MPI_HYDRA_BOOTSTRAP_EXEC",
+				Value: fmt.Sprintf("%s/%s", configMountPath, kubexecScriptName),
+			},
+		)
 	}
 
 	container.VolumeMounts = append(container.VolumeMounts,
@@ -1232,7 +1207,7 @@ func (jc *MPIJobReconciler) getRunningWorkerPods(mpiJob *kubeflowv1.MPIJob) ([]*
 
 	podFullList := &corev1.PodList{}
 	err = jc.List(context.Background(), podFullList, client.MatchingLabelsSelector{Selector: selector}, client.InNamespace(mpiJob.GetNamespace()))
-	//podFullList, err := r.PodLister.List(selector)
+	// podFullList, err := r.PodLister.List(selector)
 	if err != nil {
 		return nil, err
 	}
@@ -1243,12 +1218,7 @@ func (jc *MPIJobReconciler) getRunningWorkerPods(mpiJob *kubeflowv1.MPIJob) ([]*
 			podList = append(podList, podFullList.Items[idx])
 		}
 	}
-
-	var filter util.ObjectFilterFunction = func(obj metav1.Object) bool {
-		return metav1.IsControlledBy(obj, mpiJob)
-	}
-
-	return util.ConvertPodListWithFilter(podList, filter), nil
+	return util.JobControlledPodList(podList, mpiJob), nil
 }
 
 // newConfigMap creates a new ConfigMap containing configurations for an MPIJob
@@ -1329,9 +1299,15 @@ func updateDiscoverHostsInConfigMap(configMap *corev1.ConfigMap, mpiJob *kubeflo
 // resource. It also sets the appropriate OwnerReferences on the resource so
 // handleObject can discover the MPIJob resource that 'owns' it.
 func newLauncherServiceAccount(mpiJob *kubeflowv1.MPIJob) *corev1.ServiceAccount {
+	launcherName := mpiJob.Name + launcherSuffix
+
+	if len(mpiJob.Spec.MPIReplicaSpecs[kubeflowv1.MPIJobReplicaTypeLauncher].Template.Spec.ServiceAccountName) > 0 {
+		launcherName = mpiJob.Spec.MPIReplicaSpecs[kubeflowv1.MPIJobReplicaTypeLauncher].Template.Spec.ServiceAccountName
+	}
+
 	return &corev1.ServiceAccount{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      mpiJob.Name + launcherSuffix,
+			Name:      launcherName,
 			Namespace: mpiJob.Namespace,
 			Labels: map[string]string{
 				"app": mpiJob.Name,
@@ -1383,6 +1359,12 @@ func newLauncherRole(mpiJob *kubeflowv1.MPIJob, workerReplicas int32) *rbacv1.Ro
 // handleObject can discover the MPIJob resource that 'owns' it.
 func newLauncherRoleBinding(mpiJob *kubeflowv1.MPIJob) *rbacv1.RoleBinding {
 	launcherName := mpiJob.Name + launcherSuffix
+	saName := launcherName
+
+	if len(mpiJob.Spec.MPIReplicaSpecs[kubeflowv1.MPIJobReplicaTypeLauncher].Template.Spec.ServiceAccountName) > 0 {
+		saName = mpiJob.Spec.MPIReplicaSpecs[kubeflowv1.MPIJobReplicaTypeLauncher].Template.Spec.ServiceAccountName
+	}
+
 	return &rbacv1.RoleBinding{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      launcherName,
@@ -1397,7 +1379,7 @@ func newLauncherRoleBinding(mpiJob *kubeflowv1.MPIJob) *rbacv1.RoleBinding {
 		Subjects: []rbacv1.Subject{
 			{
 				Kind:      rbacv1.ServiceAccountKind,
-				Name:      launcherName,
+				Name:      saName,
 				Namespace: mpiJob.Namespace,
 			},
 		},
@@ -1409,8 +1391,8 @@ func newLauncherRoleBinding(mpiJob *kubeflowv1.MPIJob) *rbacv1.RoleBinding {
 	}
 }
 
-func setRestartPolicy(podTemplateSpec *corev1.PodTemplateSpec, spec *commonv1.ReplicaSpec) {
-	if spec.RestartPolicy == commonv1.RestartPolicyExitCode {
+func setRestartPolicy(podTemplateSpec *corev1.PodTemplateSpec, spec *kubeflowv1.ReplicaSpec) {
+	if spec.RestartPolicy == kubeflowv1.RestartPolicyExitCode {
 		podTemplateSpec.Spec.RestartPolicy = corev1.RestartPolicyNever
 	} else {
 		podTemplateSpec.Spec.RestartPolicy = corev1.RestartPolicy(spec.RestartPolicy)

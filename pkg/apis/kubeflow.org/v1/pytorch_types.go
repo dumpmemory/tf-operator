@@ -15,33 +15,32 @@
 package v1
 
 import (
-	commonv1 "github.com/kubeflow/common/pkg/apis/common/v1"
 	autoscalingv2 "k8s.io/api/autoscaling/v2"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 const (
-	// PytorchJobDefaultPortName is name of the port used to communicate between Master and
+	// PyTorchJobDefaultPortName is name of the port used to communicate between Master and
 	// workers.
-	PytorchJobDefaultPortName = "pytorchjob-port"
-	// PytorchJobDefaultContainerName is the name of the PyTorchJob container.
-	PytorchJobDefaultContainerName = "pytorch"
-	// PytorchJobDefaultPort is default value of the port.
-	PytorchJobDefaultPort = 23456
-	// PytorchJobDefaultRestartPolicy is default RestartPolicy for PyTorchReplicaSpec.
-	PytorchJobDefaultRestartPolicy = commonv1.RestartPolicyOnFailure
-	// PytorchJobKind is the kind name.
-	PytorchJobKind = "PyTorchJob"
-	// PytorchJobPlural is the PytorchPlural for pytorchJob.
-	PytorchJobPlural = "pytorchjobs"
-	// PytorchJobSingular is the singular for pytorchJob.
-	PytorchJobSingular = "pytorchjob"
-	// PytorchJobFrameworkName is the name of the ML Framework
-	PytorchJobFrameworkName = "pytorch"
+	PyTorchJobDefaultPortName = "pytorchjob-port"
+	// PyTorchJobDefaultContainerName is the name of the PyTorchJob container.
+	PyTorchJobDefaultContainerName = "pytorch"
+	// PyTorchJobDefaultPort is default value of the port.
+	PyTorchJobDefaultPort = 23456
+	// PyTorchJobDefaultRestartPolicy is default RestartPolicy for PyTorchReplicaSpec.
+	PyTorchJobDefaultRestartPolicy = RestartPolicyOnFailure
+	// PyTorchJobKind is the kind name.
+	PyTorchJobKind = "PyTorchJob"
+	// PyTorchJobPlural is the PyTorchPlural for pytorchJob.
+	PyTorchJobPlural = "pytorchjobs"
+	// PyTorchJobSingular is the singular for pytorchJob.
+	PyTorchJobSingular = "pytorchjob"
+	// PyTorchJobFrameworkName is the name of the ML Framework
+	PyTorchJobFrameworkName = "pytorch"
 	// PyTorchJobReplicaTypeMaster is the type of Master of distributed PyTorch
-	PyTorchJobReplicaTypeMaster commonv1.ReplicaType = "Master"
+	PyTorchJobReplicaTypeMaster ReplicaType = "Master"
 	// PyTorchJobReplicaTypeWorker is the type for workers of distributed PyTorch.
-	PyTorchJobReplicaTypeWorker commonv1.ReplicaType = "Worker"
+	PyTorchJobReplicaTypeWorker ReplicaType = "Worker"
 )
 
 // +genclient
@@ -65,8 +64,12 @@ type PyTorchJob struct {
 
 	// Most recently observed status of the PyTorchJob.
 	// Read-only (modified by the system).
-	Status commonv1.JobStatus `json:"status,omitempty"`
+	Status JobStatus `json:"status,omitempty"`
 }
+
+// For PyTorch launch/run related spec declaration, please see the following doc for more detail:
+// https://pytorch.org/docs/stable/elastic/run.html
+// Or run command `torchrun --help` for a brief description.
 
 // PyTorchJobSpec is a desired state description of the PyTorchJob.
 type PyTorchJobSpec struct {
@@ -74,7 +77,7 @@ type PyTorchJobSpec struct {
 	// job, for example how to clean up resources and how long the job can stay
 	// active.
 	//+kubebuilder:validation:Optional
-	RunPolicy commonv1.RunPolicy `json:"runPolicy"`
+	RunPolicy RunPolicy `json:"runPolicy"`
 
 	ElasticPolicy *ElasticPolicy `json:"elasticPolicy,omitempty"`
 
@@ -84,7 +87,12 @@ type PyTorchJobSpec struct {
 	//     "Master": PyTorchReplicaSpec,
 	//     "Worker": PyTorchReplicaSpec,
 	//   }
-	PyTorchReplicaSpecs map[commonv1.ReplicaType]*commonv1.ReplicaSpec `json:"pytorchReplicaSpecs"`
+	PyTorchReplicaSpecs map[ReplicaType]*ReplicaSpec `json:"pytorchReplicaSpecs"`
+
+	// Number of workers per node; supported values: [auto, cpu, gpu, int].
+	// For more, https://github.com/pytorch/pytorch/blob/26f7f470df64d90e092081e39507e4ac751f55d6/torch/distributed/run.py#L629-L658.
+	// Defaults to auto.
+	NprocPerNode *string `json:"nprocPerNode,omitempty"`
 }
 
 type ElasticPolicy struct {
@@ -108,6 +116,8 @@ type ElasticPolicy struct {
 	// are ignored.
 	Standalone *bool `json:"standalone,omitempty"`
 	// Number of workers per node; supported values: [auto, cpu, gpu, int].
+	// Deprecated: This API is deprecated in v1.7+
+	// Use .spec.nprocPerNode instead.
 	NProcPerNode *int32 `json:"nProcPerNode,omitempty"`
 
 	MaxRestarts *int32 `json:"maxRestarts,omitempty"`
@@ -158,5 +168,5 @@ type PyTorchJobList struct {
 
 func init() {
 	SchemeBuilder.Register(&PyTorchJob{}, &PyTorchJobList{})
-	SchemeBuilder.SchemeBuilder.Register(addPytorchDefaultingFuncs)
+	SchemeBuilder.SchemeBuilder.Register(addPyTorchDefaultingFuncs)
 }

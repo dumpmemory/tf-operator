@@ -3,7 +3,7 @@
   "info": {
     "description": "Python SDK for Kubeflow Training",
     "title": "Kubeflow Training SDK",
-    "version": "v1.5.0"
+    "version": "v1.7.0"
   },
   "paths": {},
   "definitions": {
@@ -33,7 +33,7 @@
           "format": "int32"
         },
         "nProcPerNode": {
-          "description": "Number of workers per node; supported values: [auto, cpu, gpu, int].",
+          "description": "Number of workers per node; supported values: [auto, cpu, gpu, int]. Deprecated: This API is deprecated in v1.7+ Use .spec.nprocPerNode instead.",
           "type": "integer",
           "format": "int32"
         },
@@ -64,6 +64,155 @@
         }
       }
     },
+    "kubeflow.org.v1.JAXJob": {
+      "description": "JAXJob Represents a JAXJob resource.",
+      "type": "object",
+      "properties": {
+        "apiVersion": {
+          "description": "APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources",
+          "type": "string"
+        },
+        "kind": {
+          "description": "Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds",
+          "type": "string"
+        },
+        "metadata": {
+          "default": {},
+          "$ref": "#/definitions/v1.ObjectMeta"
+        },
+        "spec": {
+          "description": "Specification of the desired state of the JAXJob.",
+          "default": {},
+          "$ref": "#/definitions/kubeflow.org.v1.JAXJobSpec"
+        },
+        "status": {
+          "description": "Most recently observed status of the JAXJob. Read-only (modified by the system).",
+          "default": {},
+          "$ref": "#/definitions/kubeflow.org.v1.JobStatus"
+        }
+      }
+    },
+    "kubeflow.org.v1.JAXJobList": {
+      "description": "JAXJobList is a list of JAXJobs.",
+      "type": "object",
+      "required": [
+        "items"
+      ],
+      "properties": {
+        "apiVersion": {
+          "description": "APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources",
+          "type": "string"
+        },
+        "items": {
+          "description": "List of JAXJobs.",
+          "type": "array",
+          "items": {
+            "default": {},
+            "$ref": "#/definitions/kubeflow.org.v1.JAXJob"
+          }
+        },
+        "kind": {
+          "description": "Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds",
+          "type": "string"
+        },
+        "metadata": {
+          "description": "Standard list metadata.",
+          "default": {},
+          "$ref": "#/definitions/v1.ListMeta"
+        }
+      }
+    },
+    "kubeflow.org.v1.JAXJobSpec": {
+      "description": "JAXJobSpec is a desired state description of the JAXJob.",
+      "type": "object",
+      "required": [
+        "runPolicy",
+        "jaxReplicaSpecs"
+      ],
+      "properties": {
+        "jaxReplicaSpecs": {
+          "description": "A map of JAXReplicaType (type) to ReplicaSpec (value). Specifies the JAX cluster configuration. For example,\n  {\n    \"Worker\": JAXReplicaSpec,\n  }",
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/definitions/kubeflow.org.v1.ReplicaSpec"
+          }
+        },
+        "runPolicy": {
+          "description": "RunPolicy encapsulates various runtime policies of the distributed training job, for example how to clean up resources and how long the job can stay active.",
+          "default": {},
+          "$ref": "#/definitions/kubeflow.org.v1.RunPolicy"
+        }
+      }
+    },
+    "kubeflow.org.v1.JobCondition": {
+      "description": "JobCondition describes the state of the job at a certain point.",
+      "type": "object",
+      "required": [
+        "type",
+        "status"
+      ],
+      "properties": {
+        "lastTransitionTime": {
+          "description": "Last time the condition transitioned from one status to another.",
+          "$ref": "#/definitions/v1.Time"
+        },
+        "lastUpdateTime": {
+          "description": "The last time this condition was updated.",
+          "$ref": "#/definitions/v1.Time"
+        },
+        "message": {
+          "description": "A human readable message indicating details about the transition.",
+          "type": "string"
+        },
+        "reason": {
+          "description": "The reason for the condition's last transition.",
+          "type": "string"
+        },
+        "status": {
+          "description": "Status of the condition, one of True, False, Unknown.",
+          "type": "string",
+          "default": ""
+        },
+        "type": {
+          "description": "Type of job condition.",
+          "type": "string",
+          "default": ""
+        }
+      }
+    },
+    "kubeflow.org.v1.JobStatus": {
+      "description": "JobStatus represents the current observed state of the training Job.",
+      "type": "object",
+      "properties": {
+        "completionTime": {
+          "description": "Represents time when the job was completed. It is not guaranteed to be set in happens-before order across separate operations. It is represented in RFC3339 form and is in UTC.",
+          "$ref": "#/definitions/v1.Time"
+        },
+        "conditions": {
+          "description": "Conditions is an array of current observed job conditions.",
+          "type": "array",
+          "items": {
+            "default": {},
+            "$ref": "#/definitions/kubeflow.org.v1.JobCondition"
+          }
+        },
+        "lastReconcileTime": {
+          "description": "Represents last time when the job was reconciled. It is not guaranteed to be set in happens-before order across separate operations. It is represented in RFC3339 form and is in UTC.",
+          "$ref": "#/definitions/v1.Time"
+        },
+        "replicaStatuses": {
+          "description": "ReplicaStatuses is map of ReplicaType and ReplicaStatus, specifies the status of each replica.",
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/definitions/kubeflow.org.v1.ReplicaStatus"
+          }
+        },
+        "startTime": {
+          "description": "Represents time when the job was acknowledged by the job controller. It is not guaranteed to be set in happens-before order across separate operations. It is represented in RFC3339 form and is in UTC.",
+          "$ref": "#/definitions/v1.Time"
+        }
+      }
+    },
     "kubeflow.org.v1.MPIJob": {
       "type": "object",
       "properties": {
@@ -85,7 +234,7 @@
         },
         "status": {
           "default": {},
-          "$ref": "#/definitions/v1.JobStatus"
+          "$ref": "#/definitions/kubeflow.org.v1.JobStatus"
         }
       }
     },
@@ -134,13 +283,13 @@
           "description": "`MPIReplicaSpecs` contains maps from `MPIReplicaType` to `ReplicaSpec` that specify the MPI replicas to run.",
           "type": "object",
           "additionalProperties": {
-            "$ref": "#/definitions/v1.ReplicaSpec"
+            "$ref": "#/definitions/kubeflow.org.v1.ReplicaSpec"
           }
         },
         "runPolicy": {
           "description": "`RunPolicy` encapsulates various runtime policies of the distributed training job, for example how to clean up resources and how long the job can stay active.",
           "default": {},
-          "$ref": "#/definitions/v1.RunPolicy"
+          "$ref": "#/definitions/kubeflow.org.v1.RunPolicy"
         },
         "slotsPerWorker": {
           "description": "Specifies the number of slots per worker used in hostfile. Defaults to 1.",
@@ -148,92 +297,6 @@
           "format": "int32"
         }
       }
-    },
-    "kubeflow.org.v1.MXJob": {
-      "description": "MXJob is the Schema for the mxjobs API",
-      "type": "object",
-      "properties": {
-        "apiVersion": {
-          "description": "APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources",
-          "type": "string"
-        },
-        "kind": {
-          "description": "Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds",
-          "type": "string"
-        },
-        "metadata": {
-          "default": {},
-          "$ref": "#/definitions/v1.ObjectMeta"
-        },
-        "spec": {
-          "default": {},
-          "$ref": "#/definitions/kubeflow.org.v1.MXJobSpec"
-        },
-        "status": {
-          "default": {},
-          "$ref": "#/definitions/v1.JobStatus"
-        }
-      }
-    },
-    "kubeflow.org.v1.MXJobList": {
-      "description": "MXJobList contains a list of MXJob",
-      "type": "object",
-      "required": [
-        "items"
-      ],
-      "properties": {
-        "apiVersion": {
-          "description": "APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources",
-          "type": "string"
-        },
-        "items": {
-          "type": "array",
-          "items": {
-            "default": {},
-            "$ref": "#/definitions/kubeflow.org.v1.MXJob"
-          }
-        },
-        "kind": {
-          "description": "Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds",
-          "type": "string"
-        },
-        "metadata": {
-          "default": {},
-          "$ref": "#/definitions/v1.ListMeta"
-        }
-      }
-    },
-    "kubeflow.org.v1.MXJobSpec": {
-      "description": "MXJobSpec defines the desired state of MXJob",
-      "type": "object",
-      "required": [
-        "runPolicy",
-        "jobMode",
-        "mxReplicaSpecs"
-      ],
-      "properties": {
-        "jobMode": {
-          "description": "JobMode specify the kind of MXjob to do. Different mode may have different MXReplicaSpecs request",
-          "type": "string",
-          "default": ""
-        },
-        "mxReplicaSpecs": {
-          "description": "MXReplicaSpecs is map of commonv1.ReplicaType and commonv1.ReplicaSpec specifies the MX replicas to run. For example,\n  {\n    \"Scheduler\": commonv1.ReplicaSpec,\n    \"Server\": commonv1.ReplicaSpec,\n    \"Worker\": commonv1.ReplicaSpec,\n  }",
-          "type": "object",
-          "additionalProperties": {
-            "$ref": "#/definitions/v1.ReplicaSpec"
-          }
-        },
-        "runPolicy": {
-          "description": "RunPolicy encapsulates various runtime policies of the distributed training job, for example how to clean up resources and how long the job can stay active.",
-          "default": {},
-          "$ref": "#/definitions/v1.RunPolicy"
-        }
-      }
-    },
-    "kubeflow.org.v1.MXJobStatus": {
-      "description": "MXJobStatus defines the observed state of MXJob",
-      "type": "object"
     },
     "kubeflow.org.v1.PaddleElasticPolicy": {
       "type": "object",
@@ -287,7 +350,7 @@
         "status": {
           "description": "Most recently observed status of the PaddleJob. Read-only (modified by the system).",
           "default": {},
-          "$ref": "#/definitions/v1.JobStatus"
+          "$ref": "#/definitions/kubeflow.org.v1.JobStatus"
         }
       }
     },
@@ -337,13 +400,13 @@
           "description": "A map of PaddleReplicaType (type) to ReplicaSpec (value). Specifies the Paddle cluster configuration. For example,\n  {\n    \"Master\": PaddleReplicaSpec,\n    \"Worker\": PaddleReplicaSpec,\n  }",
           "type": "object",
           "additionalProperties": {
-            "$ref": "#/definitions/v1.ReplicaSpec"
+            "$ref": "#/definitions/kubeflow.org.v1.ReplicaSpec"
           }
         },
         "runPolicy": {
           "description": "RunPolicy encapsulates various runtime policies of the distributed training job, for example how to clean up resources and how long the job can stay active.",
           "default": {},
-          "$ref": "#/definitions/v1.RunPolicy"
+          "$ref": "#/definitions/kubeflow.org.v1.RunPolicy"
         }
       }
     },
@@ -371,7 +434,7 @@
         "status": {
           "description": "Most recently observed status of the PyTorchJob. Read-only (modified by the system).",
           "default": {},
-          "$ref": "#/definitions/v1.JobStatus"
+          "$ref": "#/definitions/kubeflow.org.v1.JobStatus"
         }
       }
     },
@@ -416,17 +479,21 @@
         "elasticPolicy": {
           "$ref": "#/definitions/kubeflow.org.v1.ElasticPolicy"
         },
+        "nprocPerNode": {
+          "description": "Number of workers per node; supported values: [auto, cpu, gpu, int]. For more, https://github.com/pytorch/pytorch/blob/26f7f470df64d90e092081e39507e4ac751f55d6/torch/distributed/run.py#L629-L658. Defaults to auto.",
+          "type": "string"
+        },
         "pytorchReplicaSpecs": {
           "description": "A map of PyTorchReplicaType (type) to ReplicaSpec (value). Specifies the PyTorch cluster configuration. For example,\n  {\n    \"Master\": PyTorchReplicaSpec,\n    \"Worker\": PyTorchReplicaSpec,\n  }",
           "type": "object",
           "additionalProperties": {
-            "$ref": "#/definitions/v1.ReplicaSpec"
+            "$ref": "#/definitions/kubeflow.org.v1.ReplicaSpec"
           }
         },
         "runPolicy": {
           "description": "RunPolicy encapsulates various runtime policies of the distributed training job, for example how to clean up resources and how long the job can stay active.",
           "default": {},
-          "$ref": "#/definitions/v1.RunPolicy"
+          "$ref": "#/definitions/kubeflow.org.v1.RunPolicy"
         }
       }
     },
@@ -438,6 +505,118 @@
         },
         "value": {
           "type": "string"
+        }
+      }
+    },
+    "kubeflow.org.v1.ReplicaSpec": {
+      "description": "ReplicaSpec is a description of the replica",
+      "type": "object",
+      "properties": {
+        "replicas": {
+          "description": "Replicas is the desired number of replicas of the given template. If unspecified, defaults to 1.",
+          "type": "integer",
+          "format": "int32"
+        },
+        "restartPolicy": {
+          "description": "Restart policy for all replicas within the job. One of Always, OnFailure, Never and ExitCode. Default to Never.",
+          "type": "string"
+        },
+        "template": {
+          "description": "Template is the object that describes the pod that will be created for this replica. RestartPolicy in PodTemplateSpec will be overide by RestartPolicy in ReplicaSpec",
+          "default": {},
+          "$ref": "#/definitions/v1.PodTemplateSpec"
+        }
+      }
+    },
+    "kubeflow.org.v1.ReplicaStatus": {
+      "description": "ReplicaStatus represents the current observed state of the replica.",
+      "type": "object",
+      "properties": {
+        "active": {
+          "description": "The number of actively running pods.",
+          "type": "integer",
+          "format": "int32"
+        },
+        "failed": {
+          "description": "The number of pods which reached phase Failed.",
+          "type": "integer",
+          "format": "int32"
+        },
+        "labelSelector": {
+          "description": "Deprecated: Use Selector instead",
+          "$ref": "#/definitions/v1.LabelSelector"
+        },
+        "selector": {
+          "description": "A Selector is a label query over a set of resources. The result of matchLabels and matchExpressions are ANDed. An empty Selector matches all objects. A null Selector matches no objects.",
+          "type": "string"
+        },
+        "succeeded": {
+          "description": "The number of pods which reached phase Succeeded.",
+          "type": "integer",
+          "format": "int32"
+        }
+      }
+    },
+    "kubeflow.org.v1.RunPolicy": {
+      "description": "RunPolicy encapsulates various runtime policies of the distributed training job, for example how to clean up resources and how long the job can stay active.",
+      "type": "object",
+      "properties": {
+        "activeDeadlineSeconds": {
+          "description": "Specifies the duration in seconds relative to the startTime that the job may be active before the system tries to terminate it; value must be positive integer.",
+          "type": "integer",
+          "format": "int64"
+        },
+        "backoffLimit": {
+          "description": "Optional number of retries before marking this job failed.",
+          "type": "integer",
+          "format": "int32"
+        },
+        "cleanPodPolicy": {
+          "description": "CleanPodPolicy defines the policy to kill pods after the job completes. Default to None.",
+          "type": "string"
+        },
+        "managedBy": {
+          "description": "ManagedBy is used to indicate the controller or entity that manages a job. The value must be either an empty, 'kubeflow.org/training-operator' or 'kueue.x-k8s.io/multikueue'. The training-operator reconciles a job which doesn't have this field at all or the field value is the reserved string 'kubeflow.org/training-operator', but delegates reconciling the job with 'kueue.x-k8s.io/multikueue' to the Kueue. The field is immutable.",
+          "type": "string"
+        },
+        "schedulingPolicy": {
+          "description": "SchedulingPolicy defines the policy related to scheduling, e.g. gang-scheduling",
+          "$ref": "#/definitions/kubeflow.org.v1.SchedulingPolicy"
+        },
+        "suspend": {
+          "description": "suspend specifies whether the Job controller should create Pods or not. If a Job is created with suspend set to true, no Pods are created by the Job controller. If a Job is suspended after creation (i.e. the flag goes from false to true), the Job controller will delete all active Pods and PodGroups associated with this Job. Users must design their workload to gracefully handle this. Suspending a Job will reset the StartTime field of the Job.\n\nDefaults to false.",
+          "type": "boolean"
+        },
+        "ttlSecondsAfterFinished": {
+          "description": "TTLSecondsAfterFinished is the TTL to clean up jobs. It may take extra ReconcilePeriod seconds for the cleanup, since reconcile gets called periodically. Default to infinite.",
+          "type": "integer",
+          "format": "int32"
+        }
+      }
+    },
+    "kubeflow.org.v1.SchedulingPolicy": {
+      "description": "SchedulingPolicy encapsulates various scheduling policies of the distributed training job, for example `minAvailable` for gang-scheduling.",
+      "type": "object",
+      "properties": {
+        "minAvailable": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "minResources": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/definitions/.Quantity"
+          }
+        },
+        "priorityClass": {
+          "type": "string"
+        },
+        "queue": {
+          "type": "string"
+        },
+        "scheduleTimeoutSeconds": {
+          "type": "integer",
+          "format": "int32"
         }
       }
     },
@@ -465,7 +644,7 @@
         "status": {
           "description": "Most recently observed status of the TFJob. Populated by the system. Read-only.",
           "default": {},
-          "$ref": "#/definitions/v1.JobStatus"
+          "$ref": "#/definitions/kubeflow.org.v1.JobStatus"
         }
       }
     },
@@ -514,7 +693,7 @@
         "runPolicy": {
           "description": "RunPolicy encapsulates various runtime policies of the distributed training job, for example how to clean up resources and how long the job can stay active.",
           "default": {},
-          "$ref": "#/definitions/v1.RunPolicy"
+          "$ref": "#/definitions/kubeflow.org.v1.RunPolicy"
         },
         "successPolicy": {
           "description": "SuccessPolicy defines the policy to mark the TFJob as succeeded. Default to \"\", using the default rules.",
@@ -524,7 +703,7 @@
           "description": "A map of TFReplicaType (type) to ReplicaSpec (value). Specifies the TF cluster configuration. For example,\n  {\n    \"PS\": ReplicaSpec,\n    \"Worker\": ReplicaSpec,\n  }",
           "type": "object",
           "additionalProperties": {
-            "$ref": "#/definitions/v1.ReplicaSpec"
+            "$ref": "#/definitions/kubeflow.org.v1.ReplicaSpec"
           }
         }
       }
@@ -551,7 +730,7 @@
         },
         "status": {
           "default": {},
-          "$ref": "#/definitions/v1.JobStatus"
+          "$ref": "#/definitions/kubeflow.org.v1.JobStatus"
         }
       }
     },
@@ -594,193 +773,13 @@
         "runPolicy": {
           "description": "INSERT ADDITIONAL SPEC FIELDS - desired state of cluster Important: Run \"make\" to regenerate code after modifying this file",
           "default": {},
-          "$ref": "#/definitions/v1.RunPolicy"
+          "$ref": "#/definitions/kubeflow.org.v1.RunPolicy"
         },
         "xgbReplicaSpecs": {
           "type": "object",
           "additionalProperties": {
-            "$ref": "#/definitions/v1.ReplicaSpec"
+            "$ref": "#/definitions/kubeflow.org.v1.ReplicaSpec"
           }
-        }
-      }
-    },
-    "v1.JobCondition": {
-      "description": "JobCondition describes the state of the job at a certain point.",
-      "type": "object",
-      "required": [
-        "type",
-        "status"
-      ],
-      "properties": {
-        "lastTransitionTime": {
-          "description": "Last time the condition transitioned from one status to another.",
-          "default": {},
-          "$ref": "#/definitions/v1.Time"
-        },
-        "lastUpdateTime": {
-          "description": "The last time this condition was updated.",
-          "default": {},
-          "$ref": "#/definitions/v1.Time"
-        },
-        "message": {
-          "description": "A human readable message indicating details about the transition.",
-          "type": "string"
-        },
-        "reason": {
-          "description": "The reason for the condition's last transition.",
-          "type": "string"
-        },
-        "status": {
-          "description": "Status of the condition, one of True, False, Unknown.",
-          "type": "string",
-          "default": ""
-        },
-        "type": {
-          "description": "Type of job condition.",
-          "type": "string",
-          "default": ""
-        }
-      }
-    },
-    "v1.JobStatus": {
-      "description": "JobStatus represents the current observed state of the training Job.",
-      "type": "object",
-      "required": [
-        "conditions",
-        "replicaStatuses"
-      ],
-      "properties": {
-        "completionTime": {
-          "description": "Represents time when the job was completed. It is not guaranteed to be set in happens-before order across separate operations. It is represented in RFC3339 form and is in UTC.",
-          "$ref": "#/definitions/v1.Time"
-        },
-        "conditions": {
-          "description": "Conditions is an array of current observed job conditions.",
-          "type": "array",
-          "items": {
-            "default": {},
-            "$ref": "#/definitions/v1.JobCondition"
-          }
-        },
-        "lastReconcileTime": {
-          "description": "Represents last time when the job was reconciled. It is not guaranteed to be set in happens-before order across separate operations. It is represented in RFC3339 form and is in UTC.",
-          "$ref": "#/definitions/v1.Time"
-        },
-        "replicaStatuses": {
-          "description": "ReplicaStatuses is map of ReplicaType and ReplicaStatus, specifies the status of each replica.",
-          "type": "object",
-          "additionalProperties": {
-            "$ref": "#/definitions/v1.ReplicaStatus"
-          }
-        },
-        "startTime": {
-          "description": "Represents time when the job was acknowledged by the job controller. It is not guaranteed to be set in happens-before order across separate operations. It is represented in RFC3339 form and is in UTC.",
-          "$ref": "#/definitions/v1.Time"
-        }
-      }
-    },
-    "v1.ReplicaSpec": {
-      "description": "ReplicaSpec is a description of the replica",
-      "type": "object",
-      "properties": {
-        "replicas": {
-          "description": "Replicas is the desired number of replicas of the given template. If unspecified, defaults to 1.",
-          "type": "integer",
-          "format": "int32"
-        },
-        "restartPolicy": {
-          "description": "Restart policy for all replicas within the job. One of Always, OnFailure, Never and ExitCode. Default to Never.",
-          "type": "string"
-        },
-        "template": {
-          "description": "Template is the object that describes the pod that will be created for this replica. RestartPolicy in PodTemplateSpec will be overide by RestartPolicy in ReplicaSpec",
-          "default": {},
-          "$ref": "#/definitions/v1.PodTemplateSpec"
-        }
-      }
-    },
-    "v1.ReplicaStatus": {
-      "description": "ReplicaStatus represents the current observed state of the replica.",
-      "type": "object",
-      "properties": {
-        "active": {
-          "description": "The number of actively running pods.",
-          "type": "integer",
-          "format": "int32"
-        },
-        "failed": {
-          "description": "The number of pods which reached phase Failed.",
-          "type": "integer",
-          "format": "int32"
-        },
-        "labelSelector": {
-          "description": "Deprecated: Use Selector instead",
-          "$ref": "#/definitions/v1.LabelSelector"
-        },
-        "selector": {
-          "description": "A Selector is a label query over a set of resources. The result of matchLabels and matchExpressions are ANDed. An empty Selector matches all objects. A null Selector matches no objects.",
-          "type": "string"
-        },
-        "succeeded": {
-          "description": "The number of pods which reached phase Succeeded.",
-          "type": "integer",
-          "format": "int32"
-        }
-      }
-    },
-    "v1.RunPolicy": {
-      "description": "RunPolicy encapsulates various runtime policies of the distributed training job, for example how to clean up resources and how long the job can stay active.",
-      "type": "object",
-      "properties": {
-        "activeDeadlineSeconds": {
-          "description": "Specifies the duration in seconds relative to the startTime that the job may be active before the system tries to terminate it; value must be positive integer.",
-          "type": "integer",
-          "format": "int64"
-        },
-        "backoffLimit": {
-          "description": "Optional number of retries before marking this job failed.",
-          "type": "integer",
-          "format": "int32"
-        },
-        "cleanPodPolicy": {
-          "description": "CleanPodPolicy defines the policy to kill pods after the job completes. Default to Running.",
-          "type": "string"
-        },
-        "schedulingPolicy": {
-          "description": "SchedulingPolicy defines the policy related to scheduling, e.g. gang-scheduling",
-          "$ref": "#/definitions/v1.SchedulingPolicy"
-        },
-        "ttlSecondsAfterFinished": {
-          "description": "TTLSecondsAfterFinished is the TTL to clean up jobs. It may take extra ReconcilePeriod seconds for the cleanup, since reconcile gets called periodically. Default to infinite.",
-          "type": "integer",
-          "format": "int32"
-        }
-      }
-    },
-    "v1.SchedulingPolicy": {
-      "description": "SchedulingPolicy encapsulates various scheduling policies of the distributed training job, for example `minAvailable` for gang-scheduling.",
-      "type": "object",
-      "properties": {
-        "minAvailable": {
-          "type": "integer",
-          "format": "int32"
-        },
-        "minResources": {
-          "type": "object",
-          "additionalProperties": {
-            "default": {},
-            "$ref": "#/definitions/.Quantity"
-          }
-        },
-        "priorityClass": {
-          "type": "string"
-        },
-        "queue": {
-          "type": "string"
-        },
-        "scheduleTimeoutSeconds": {
-          "type": "integer",
-          "format": "int32"
         }
       }
     }

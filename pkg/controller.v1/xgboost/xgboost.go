@@ -19,7 +19,6 @@ import (
 	"strconv"
 	"strings"
 
-	commonv1 "github.com/kubeflow/common/pkg/apis/common/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
@@ -42,7 +41,7 @@ func SetPodEnv(job interface{}, podTemplate *corev1.PodTemplateSpec, rtype, inde
 
 	// Add master offset for worker pods
 	if strings.EqualFold(strings.ToLower(rtype), strings.ToLower(string(kubeflowv1.XGBoostJobReplicaTypeWorker))) {
-		masterSpec := xgboostjob.Spec.XGBReplicaSpecs[commonv1.ReplicaType(kubeflowv1.XGBoostJobReplicaTypeMaster)]
+		masterSpec := xgboostjob.Spec.XGBReplicaSpecs[kubeflowv1.XGBoostJobReplicaTypeMaster]
 		masterReplicas := int(*masterSpec.Replicas)
 		rank += masterReplicas
 	}
@@ -93,7 +92,7 @@ func SetPodEnv(job interface{}, podTemplate *corev1.PodTemplateSpec, rtype, inde
 		})
 		podTemplate.Spec.Containers[i].Env = append(podTemplate.Spec.Containers[i].Env, corev1.EnvVar{
 			Name:  "PYTHONUNBUFFERED",
-			Value: "0",
+			Value: "1",
 		})
 		// This variables are used if it is a LightGBM job
 		if totalReplicas > 1 {
@@ -111,14 +110,14 @@ func SetPodEnv(job interface{}, podTemplate *corev1.PodTemplateSpec, rtype, inde
 	return nil
 }
 
-func replicaName(jobName string, rtype commonv1.ReplicaType, index int) string {
+func replicaName(jobName string, rtype kubeflowv1.ReplicaType, index int) string {
 	n := jobName + "-" + strings.ToLower(string(rtype)) + "-" + strconv.Itoa(index)
 	return strings.Replace(n, "/", "-", -1)
 }
 
 // getPortFromXGBoostJob gets the port of xgboost container.
-func getPortFromXGBoostJob(job *kubeflowv1.XGBoostJob, rtype commonv1.ReplicaType) (int32, error) {
-	containers := job.Spec.XGBReplicaSpecs[commonv1.ReplicaType(rtype)].Template.Spec.Containers
+func getPortFromXGBoostJob(job *kubeflowv1.XGBoostJob, rtype kubeflowv1.ReplicaType) (int32, error) {
+	containers := job.Spec.XGBReplicaSpecs[rtype].Template.Spec.Containers
 	for _, container := range containers {
 		if container.Name == kubeflowv1.XGBoostJobDefaultContainerName {
 			ports := container.Ports
@@ -136,7 +135,7 @@ func computeTotalReplicas(obj metav1.Object) int32 {
 	job := obj.(*kubeflowv1.XGBoostJob)
 	jobReplicas := int32(0)
 
-	if job.Spec.XGBReplicaSpecs == nil || len(job.Spec.XGBReplicaSpecs) == 0 {
+	if len(job.Spec.XGBReplicaSpecs) == 0 {
 		return jobReplicas
 	}
 	for _, r := range job.Spec.XGBReplicaSpecs {

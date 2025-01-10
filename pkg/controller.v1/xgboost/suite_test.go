@@ -15,27 +15,41 @@
 package xgboost
 
 import (
-	"path/filepath"
+	"context"
+	"crypto/tls"
+	"fmt"
+	"net"
 	"testing"
+	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"k8s.io/client-go/kubernetes/scheme"
+	"path/filepath"
+	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
-	v1beta1 "volcano.sh/apis/pkg/apis/scheduling/v1beta1"
+	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
+	"sigs.k8s.io/controller-runtime/pkg/webhook"
+	"volcano.sh/apis/pkg/apis/scheduling/v1beta1"
 
 	kubeflowv1 "github.com/kubeflow/training-operator/pkg/apis/kubeflow.org/v1"
+	"github.com/kubeflow/training-operator/pkg/controller.v1/common"
+	xgboostwebhook "github.com/kubeflow/training-operator/pkg/webhooks/xgboost"
 	//+kubebuilder:scaffold:imports
 )
 
 // These tests use Ginkgo (BDD-style Go testing framework). Refer to
 // http://onsi.github.io/ginkgo/ to learn more about Ginkgo.
 
-var k8sClient client.Client
-var testEnv *envtest.Environment
+var (
+	testK8sClient client.Client
+	testEnv       *envtest.Environment
+	testCtx       context.Context
+	testCancel    context.CancelFunc
+)
 
 func TestAPIs(t *testing.T) {
 	RegisterFailHandler(Fail)
@@ -46,10 +60,15 @@ func TestAPIs(t *testing.T) {
 var _ = BeforeSuite(func() {
 	logf.SetLogger(zap.New(zap.WriteTo(GinkgoWriter), zap.UseDevMode(true)))
 
+	testCtx, testCancel = context.WithCancel(context.TODO())
+
 	By("bootstrapping test environment")
 	testEnv = &envtest.Environment{
 		CRDDirectoryPaths:     []string{filepath.Join("..", "..", "..", "manifests", "base", "crds")},
 		ErrorIfCRDPathMissing: true,
+		WebhookInstallOptions: envtest.WebhookInstallOptions{
+			Paths: []string{filepath.Join("..", "..", "..", "manifests", "base", "webhook", "manifests.yaml")},
+		},
 	}
 
 	cfg, err := testEnv.Start()
@@ -63,14 +82,47 @@ var _ = BeforeSuite(func() {
 
 	//+kubebuilder:scaffold:scheme
 
-	k8sClient, err = client.New(cfg, client.Options{Scheme: scheme.Scheme})
+	testK8sClient, err = client.New(cfg, client.Options{Scheme: scheme.Scheme})
 	Expect(err).NotTo(HaveOccurred())
-	Expect(k8sClient).NotTo(BeNil())
+	Expect(testK8sClient).NotTo(BeNil())
 
+	mgr, err := ctrl.NewManager(cfg, ctrl.Options{
+		Metrics: metricsserver.Options{
+			BindAddress: "0",
+		},
+		WebhookServer: webhook.NewServer(
+			webhook.Options{
+				Host:    testEnv.WebhookInstallOptions.LocalServingHost,
+				Port:    testEnv.WebhookInstallOptions.LocalServingPort,
+				CertDir: testEnv.WebhookInstallOptions.LocalServingCertDir,
+			}),
+	})
+	Expect(err).NotTo(HaveOccurred())
+
+	gangSchedulingSetupFunc := common.GenNonGangSchedulerSetupFunc()
+	r := NewReconciler(mgr, gangSchedulingSetupFunc)
+
+	Expect(r.SetupWithManager(mgr, 1)).NotTo(HaveOccurred())
+	Expect(xgboostwebhook.SetupWebhook(mgr)).NotTo(HaveOccurred())
+
+	go func() {
+		defer GinkgoRecover()
+		err = mgr.Start(testCtx)
+		Expect(err).ToNot(HaveOccurred(), "failed to run manager")
+	}()
+
+	dialer := &net.Dialer{Timeout: time.Second}
+	addrPort := fmt.Sprintf("%s:%d", testEnv.WebhookInstallOptions.LocalServingHost, testEnv.WebhookInstallOptions.LocalServingPort)
+	Eventually(func(g Gomega) {
+		conn, err := tls.DialWithDialer(dialer, "tcp", addrPort, &tls.Config{InsecureSkipVerify: true})
+		g.Expect(err).NotTo(HaveOccurred())
+		g.Expect(conn.Close()).NotTo(HaveOccurred())
+	}).Should(Succeed())
 })
 
 var _ = AfterSuite(func() {
 	By("tearing down the test environment")
+	testCancel()
 	err := testEnv.Stop()
 	Expect(err).NotTo(HaveOccurred())
 })

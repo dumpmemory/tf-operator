@@ -17,53 +17,77 @@ package util
 import (
 	"fmt"
 	"reflect"
+	"strings"
 
-	commonv1 "github.com/kubeflow/common/pkg/apis/common/v1"
-	"github.com/kubeflow/common/pkg/controller.v1/common"
-	"github.com/kubeflow/common/pkg/controller.v1/expectation"
-	commonutil "github.com/kubeflow/common/pkg/util"
-	corev1 "k8s.io/api/core/v1"
+	log "github.com/sirupsen/logrus"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/event"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
+
+	kubeflowv1 "github.com/kubeflow/training-operator/pkg/apis/kubeflow.org/v1"
+	"github.com/kubeflow/training-operator/pkg/controller.v1/common"
+	"github.com/kubeflow/training-operator/pkg/controller.v1/expectation"
 )
 
-// SatisfiedExpectations returns true if the required adds/dels for the given mxjob have been observed.
-// Add/del counts are established by the controller at sync time, and updated as controllees are observed by the controller
-// manager.
-func SatisfiedExpectations(exp expectation.ControllerExpectationsInterface, jobKey string, replicaTypes []commonv1.ReplicaType) bool {
-	satisfied := false
-	for _, rtype := range replicaTypes {
-		// Check the expectations of the pods.
-		expectationPodsKey := expectation.GenExpectationPodsKey(jobKey, string(rtype))
-		satisfied = satisfied || exp.SatisfiedExpectations(expectationPodsKey)
-		// Check the expectations of the services.
-		expectationServicesKey := expectation.GenExpectationServicesKey(jobKey, string(rtype))
-		satisfied = satisfied || exp.SatisfiedExpectations(expectationServicesKey)
-	}
-
-	return satisfied
+// GenExpectationGenericKey generates an expectation key for {Kind} of a job
+func GenExpectationGenericKey(jobKey string, replicaType string, pl string) string {
+	return jobKey + "/" + strings.ToLower(replicaType) + "/" + pl
 }
 
-// OnDependentCreateFunc modify expectations when dependent (pod/service) creation observed.
-func OnDependentCreateFunc(exp expectation.ControllerExpectationsInterface) func(event.CreateEvent) bool {
-	return func(e event.CreateEvent) bool {
-		rtype := e.Object.GetLabels()[commonv1.ReplicaTypeLabel]
+// LoggerForGenericKind generates log entry for generic Kubernetes resource Kind
+func LoggerForGenericKind(obj metav1.Object, kind string) *log.Entry {
+	job := ""
+	if controllerRef := metav1.GetControllerOf(obj); controllerRef != nil {
+		if controllerRef.Kind == kind {
+			job = obj.GetNamespace() + "." + controllerRef.Name
+		}
+	}
+	return log.WithFields(log.Fields{
+		// We use job to match the key used in controller.go
+		// In controller.go we log the key used with the workqueue.
+		"job": job,
+		kind:  obj.GetNamespace() + "." + obj.GetName(),
+		"uid": obj.GetUID(),
+	})
+}
+
+func objectKind(s *runtime.Scheme, obj client.Object) schema.GroupVersionKind {
+	gkvs, _, err := s.ObjectKinds(obj)
+	if err != nil {
+		var logger = LoggerForGenericKind(obj, "")
+		logger.Errorf("unknown kind for %v", obj)
+		return schema.GroupVersionKind{}
+	}
+	return gkvs[0]
+}
+
+func OnDependentFuncs[T client.Object](s *runtime.Scheme, expectations expectation.ControllerExpectationsInterface, jobController *common.JobController) predicate.TypedFuncs[T] {
+	return predicate.TypedFuncs[T]{
+		CreateFunc: OnDependentCreateFuncGeneric[T](s, expectations),
+		UpdateFunc: OnDependentUpdateFuncGeneric[T](s, jobController),
+		DeleteFunc: OnDependentDeleteFuncGeneric[T](s, expectations),
+	}
+}
+
+// OnDependentCreateFuncGeneric modify expectations when dependent (pod/service) creation observed.
+func OnDependentCreateFuncGeneric[T client.Object](s *runtime.Scheme, exp expectation.ControllerExpectationsInterface) func(createEvent event.TypedCreateEvent[T]) bool {
+	return func(e event.TypedCreateEvent[T]) bool {
+		rtype := e.Object.GetLabels()[kubeflowv1.ReplicaTypeLabel]
 		if len(rtype) == 0 {
 			return false
 		}
 
-		//logrus.Info("Update on create function ", ptjr.ControllerName(), " create object ", e.Object.GetName())
 		if controllerRef := metav1.GetControllerOf(e.Object); controllerRef != nil {
 			jobKey := fmt.Sprintf("%s/%s", e.Object.GetNamespace(), controllerRef.Name)
-			var expectKey string
-			switch e.Object.(type) {
-			case *corev1.Pod:
-				expectKey = expectation.GenExpectationPodsKey(jobKey, rtype)
-			case *corev1.Service:
-				expectKey = expectation.GenExpectationServicesKey(jobKey, rtype)
-			default:
-				return false
+			kind := e.Object.GetObjectKind().GroupVersionKind().Kind
+			if kind == "" {
+				kind = objectKind(s, e.Object).Kind
 			}
+			pl := strings.ToLower(kind) + "s"
+			expectKey := GenExpectationGenericKey(jobKey, rtype, pl)
 			exp.CreationObserved(expectKey)
 			return true
 		}
@@ -72,9 +96,9 @@ func OnDependentCreateFunc(exp expectation.ControllerExpectationsInterface) func
 	}
 }
 
-// OnDependentUpdateFunc modify expectations when dependent (pod/service) update observed.
-func OnDependentUpdateFunc(jc *common.JobController) func(updateEvent event.UpdateEvent) bool {
-	return func(e event.UpdateEvent) bool {
+// OnDependentUpdateFuncGeneric modify expectations when dependent update observed.
+func OnDependentUpdateFuncGeneric[T client.Object](_ *runtime.Scheme, jc *common.JobController) func(updateEvent event.TypedUpdateEvent[T]) bool {
+	return func(e event.TypedUpdateEvent[T]) bool {
 		newObj := e.ObjectNew
 		oldObj := e.ObjectOld
 		if newObj.GetResourceVersion() == oldObj.GetResourceVersion() {
@@ -86,15 +110,6 @@ func OnDependentUpdateFunc(jc *common.JobController) func(updateEvent event.Upda
 		kind := jc.Controller.GetAPIGroupVersionKind().Kind
 		var logger = LoggerForGenericKind(newObj, kind)
 
-		switch obj := newObj.(type) {
-		case *corev1.Pod:
-			logger = commonutil.LoggerForPod(obj, jc.Controller.GetAPIGroupVersionKind().Kind)
-		case *corev1.Service:
-			logger = commonutil.LoggerForService(newObj.(*corev1.Service), jc.Controller.GetAPIGroupVersionKind().Kind)
-		default:
-			return false
-		}
-
 		newControllerRef := metav1.GetControllerOf(newObj)
 		oldControllerRef := metav1.GetControllerOf(oldObj)
 		controllerRefChanged := !reflect.DeepEqual(newControllerRef, oldControllerRef)
@@ -102,7 +117,7 @@ func OnDependentUpdateFunc(jc *common.JobController) func(updateEvent event.Upda
 		if controllerRefChanged && oldControllerRef != nil {
 			// The ControllerRef was changed. Sync the old controller, if any.
 			if job := resolveControllerRef(jc, oldObj.GetNamespace(), oldControllerRef); job != nil {
-				logger.Infof("pod/service controller ref updated: %v, %v", newObj, oldObj)
+				logger.Infof("%s controller ref updated: %v, %v", kind, newObj, oldObj)
 				return true
 			}
 		}
@@ -113,11 +128,52 @@ func OnDependentUpdateFunc(jc *common.JobController) func(updateEvent event.Upda
 			if job == nil {
 				return false
 			}
-			logger.Debugf("pod/service has a controller ref: %v, %v", newObj, oldObj)
+			logger.Debugf("%s has a controller ref: %v, %v", kind, newObj, oldObj)
 			return true
 		}
 		return false
 	}
+}
+
+// OnDependentDeleteFuncGeneric modify expectations when dependent deletion observed.
+func OnDependentDeleteFuncGeneric[T client.Object](s *runtime.Scheme, exp expectation.ControllerExpectationsInterface) func(event.TypedDeleteEvent[T]) bool {
+	return func(e event.TypedDeleteEvent[T]) bool {
+		rtype := e.Object.GetLabels()[kubeflowv1.ReplicaTypeLabel]
+		if len(rtype) == 0 {
+			return false
+		}
+
+		if controllerRef := metav1.GetControllerOf(e.Object); controllerRef != nil {
+			jobKey := fmt.Sprintf("%s/%s", e.Object.GetNamespace(), controllerRef.Name)
+			kind := e.Object.GetObjectKind().GroupVersionKind().Kind
+			if kind == "" {
+				kind = objectKind(s, e.Object).Kind
+			}
+			pl := strings.ToLower(kind) + "s"
+			expectKey := GenExpectationGenericKey(jobKey, rtype, pl)
+			exp.DeletionObserved(expectKey)
+			return true
+		}
+
+		return true
+	}
+}
+
+// SatisfiedExpectations returns true if the required adds/dels for the given job have been observed.
+// Add/del counts are established by the controller at sync time, and updated as controllees are observed by the controller
+// manager.
+func SatisfiedExpectations(exp expectation.ControllerExpectationsInterface, jobKey string, replicaTypes []kubeflowv1.ReplicaType) bool {
+	satisfied := false
+	for _, rtype := range replicaTypes {
+		// Check the expectations of the pods.
+		expectationPodsKey := expectation.GenExpectationPodsKey(jobKey, string(rtype))
+		satisfied = satisfied || exp.SatisfiedExpectations(expectationPodsKey)
+		// Check the expectations of the services.
+		expectationServicesKey := expectation.GenExpectationServicesKey(jobKey, string(rtype))
+		satisfied = satisfied || exp.SatisfiedExpectations(expectationServicesKey)
+	}
+
+	return satisfied
 }
 
 // resolveControllerRef returns the job referenced by a ControllerRef,
@@ -139,33 +195,4 @@ func resolveControllerRef(jc *common.JobController, namespace string, controller
 		return nil
 	}
 	return job
-}
-
-// OnDependentDeleteFunc modify expectations when dependent (pod/service) deletion observed.
-func OnDependentDeleteFunc(exp expectation.ControllerExpectationsInterface) func(event.DeleteEvent) bool {
-	return func(e event.DeleteEvent) bool {
-
-		rtype := e.Object.GetLabels()[commonv1.ReplicaTypeLabel]
-		if len(rtype) == 0 {
-			return false
-		}
-
-		// logrus.Info("Update on deleting function ", xgbr.ControllerName(), " delete object ", e.Object.GetName())
-		if controllerRef := metav1.GetControllerOf(e.Object); controllerRef != nil {
-			jobKey := fmt.Sprintf("%s/%s", e.Object.GetNamespace(), controllerRef.Name)
-			var expectKey string
-			switch e.Object.(type) {
-			case *corev1.Pod:
-				expectKey = expectation.GenExpectationPodsKey(jobKey, rtype)
-			case *corev1.Service:
-				expectKey = expectation.GenExpectationServicesKey(jobKey, rtype)
-			default:
-				return false
-			}
-			exp.DeletionObserved(expectKey)
-			return true
-		}
-
-		return true
-	}
 }

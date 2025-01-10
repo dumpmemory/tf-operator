@@ -1,4 +1,4 @@
-// Copyright 2021 The Kubeflow Authors
+// Copyright 2024 The Kubeflow Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -16,6 +16,14 @@
 
 package v1
 
+// JAXJobListerExpansion allows custom methods to be added to
+// JAXJobLister.
+type JAXJobListerExpansion interface{}
+
+// JAXJobNamespaceListerExpansion allows custom methods to be added to
+// JAXJobNamespaceLister.
+type JAXJobNamespaceListerExpansion interface{}
+
 // MPIJobListerExpansion allows custom methods to be added to
 // MPIJobLister.
 type MPIJobListerExpansion interface{}
@@ -23,14 +31,6 @@ type MPIJobListerExpansion interface{}
 // MPIJobNamespaceListerExpansion allows custom methods to be added to
 // MPIJobNamespaceLister.
 type MPIJobNamespaceListerExpansion interface{}
-
-// MXJobListerExpansion allows custom methods to be added to
-// MXJobLister.
-type MXJobListerExpansion interface{}
-
-// MXJobNamespaceListerExpansion allows custom methods to be added to
-// MXJobNamespaceLister.
-type MXJobNamespaceListerExpansion interface{}
 
 // PaddleJobListerExpansion allows custom methods to be added to
 // PaddleJobLister.

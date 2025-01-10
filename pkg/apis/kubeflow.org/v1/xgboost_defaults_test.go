@@ -18,12 +18,11 @@ import (
 	"reflect"
 	"testing"
 
-	commonv1 "github.com/kubeflow/common/pkg/apis/common/v1"
 	corev1 "k8s.io/api/core/v1"
-	"k8s.io/utils/pointer"
+	"k8s.io/utils/ptr"
 )
 
-func expectedXGBoostJob(cleanPodPolicy commonv1.CleanPodPolicy, restartPolicy commonv1.RestartPolicy, replicas int32, portName string, port int32) *XGBoostJob {
+func expectedXGBoostJob(cleanPodPolicy CleanPodPolicy, restartPolicy RestartPolicy, replicas int32, portName string, port int32) *XGBoostJob {
 	var ports []corev1.ContainerPort
 
 	// port not set
@@ -48,17 +47,17 @@ func expectedXGBoostJob(cleanPodPolicy commonv1.CleanPodPolicy, restartPolicy co
 
 	return &XGBoostJob{
 		Spec: XGBoostJobSpec{
-			RunPolicy: commonv1.RunPolicy{
+			RunPolicy: RunPolicy{
 				CleanPodPolicy: &cleanPodPolicy,
 			},
-			XGBReplicaSpecs: map[commonv1.ReplicaType]*commonv1.ReplicaSpec{
-				XGBoostJobReplicaTypeWorker: &commonv1.ReplicaSpec{
-					Replicas:      pointer.Int32(replicas),
+			XGBReplicaSpecs: map[ReplicaType]*ReplicaSpec{
+				XGBoostJobReplicaTypeWorker: {
+					Replicas:      ptr.To[int32](replicas),
 					RestartPolicy: restartPolicy,
 					Template: corev1.PodTemplateSpec{
 						Spec: corev1.PodSpec{
 							Containers: []corev1.Container{
-								corev1.Container{
+								{
 									Name:  XGBoostJobDefaultContainerName,
 									Image: testImage,
 									Ports: ports,
@@ -80,12 +79,12 @@ func TestSetDefaults_XGBoostJob(t *testing.T) {
 		"set spec with minimum setting": {
 			original: &XGBoostJob{
 				Spec: XGBoostJobSpec{
-					XGBReplicaSpecs: map[commonv1.ReplicaType]*commonv1.ReplicaSpec{
-						XGBoostJobReplicaTypeWorker: &commonv1.ReplicaSpec{
+					XGBReplicaSpecs: map[ReplicaType]*ReplicaSpec{
+						XGBoostJobReplicaTypeWorker: {
 							Template: corev1.PodTemplateSpec{
 								Spec: corev1.PodSpec{
 									Containers: []corev1.Container{
-										corev1.Container{
+										{
 											Name:  XGBoostJobDefaultContainerName,
 											Image: testImage,
 										},
@@ -96,18 +95,18 @@ func TestSetDefaults_XGBoostJob(t *testing.T) {
 					},
 				},
 			},
-			expected: expectedXGBoostJob(commonv1.CleanPodPolicyNone, XGBoostJobDefaultRestartPolicy, 1, XGBoostJobDefaultPortName, XGBoostJobDefaultPort),
+			expected: expectedXGBoostJob(CleanPodPolicyNone, XGBoostJobDefaultRestartPolicy, 1, XGBoostJobDefaultPortName, XGBoostJobDefaultPort),
 		},
 		"Set spec with restart policy": {
 			original: &XGBoostJob{
 				Spec: XGBoostJobSpec{
-					XGBReplicaSpecs: map[commonv1.ReplicaType]*commonv1.ReplicaSpec{
-						XGBoostJobReplicaTypeWorker: &commonv1.ReplicaSpec{
-							RestartPolicy: commonv1.RestartPolicyOnFailure,
+					XGBReplicaSpecs: map[ReplicaType]*ReplicaSpec{
+						XGBoostJobReplicaTypeWorker: {
+							RestartPolicy: RestartPolicyOnFailure,
 							Template: corev1.PodTemplateSpec{
 								Spec: corev1.PodSpec{
 									Containers: []corev1.Container{
-										corev1.Container{
+										{
 											Name:  XGBoostJobDefaultContainerName,
 											Image: testImage,
 										},
@@ -118,18 +117,18 @@ func TestSetDefaults_XGBoostJob(t *testing.T) {
 					},
 				},
 			},
-			expected: expectedXGBoostJob(commonv1.CleanPodPolicyNone, commonv1.RestartPolicyOnFailure, 1, XGBoostJobDefaultPortName, XGBoostJobDefaultPort),
+			expected: expectedXGBoostJob(CleanPodPolicyNone, RestartPolicyOnFailure, 1, XGBoostJobDefaultPortName, XGBoostJobDefaultPort),
 		},
 		"Set spec with replicas": {
 			original: &XGBoostJob{
 				Spec: XGBoostJobSpec{
-					XGBReplicaSpecs: map[commonv1.ReplicaType]*commonv1.ReplicaSpec{
-						XGBoostJobReplicaTypeWorker: &commonv1.ReplicaSpec{
-							Replicas: pointer.Int32(3),
+					XGBReplicaSpecs: map[ReplicaType]*ReplicaSpec{
+						XGBoostJobReplicaTypeWorker: {
+							Replicas: ptr.To[int32](3),
 							Template: corev1.PodTemplateSpec{
 								Spec: corev1.PodSpec{
 									Containers: []corev1.Container{
-										corev1.Container{
+										{
 											Name:  XGBoostJobDefaultContainerName,
 											Image: testImage,
 										},
@@ -140,22 +139,22 @@ func TestSetDefaults_XGBoostJob(t *testing.T) {
 					},
 				},
 			},
-			expected: expectedXGBoostJob(commonv1.CleanPodPolicyNone, XGBoostJobDefaultRestartPolicy, 3, XGBoostJobDefaultPortName, XGBoostJobDefaultPort),
+			expected: expectedXGBoostJob(CleanPodPolicyNone, XGBoostJobDefaultRestartPolicy, 3, XGBoostJobDefaultPortName, XGBoostJobDefaultPort),
 		},
 
 		"Set spec with default node port name and port": {
 			original: &XGBoostJob{
 				Spec: XGBoostJobSpec{
-					XGBReplicaSpecs: map[commonv1.ReplicaType]*commonv1.ReplicaSpec{
-						XGBoostJobReplicaTypeWorker: &commonv1.ReplicaSpec{
+					XGBReplicaSpecs: map[ReplicaType]*ReplicaSpec{
+						XGBoostJobReplicaTypeWorker: {
 							Template: corev1.PodTemplateSpec{
 								Spec: corev1.PodSpec{
 									Containers: []corev1.Container{
-										corev1.Container{
+										{
 											Name:  XGBoostJobDefaultContainerName,
 											Image: testImage,
 											Ports: []corev1.ContainerPort{
-												corev1.ContainerPort{
+												{
 													Name:          XGBoostJobDefaultPortName,
 													ContainerPort: XGBoostJobDefaultPort,
 												},
@@ -168,22 +167,22 @@ func TestSetDefaults_XGBoostJob(t *testing.T) {
 					},
 				},
 			},
-			expected: expectedXGBoostJob(commonv1.CleanPodPolicyNone, XGBoostJobDefaultRestartPolicy, 1, XGBoostJobDefaultPortName, XGBoostJobDefaultPort),
+			expected: expectedXGBoostJob(CleanPodPolicyNone, XGBoostJobDefaultRestartPolicy, 1, XGBoostJobDefaultPortName, XGBoostJobDefaultPort),
 		},
 
 		"Set spec with node port": {
 			original: &XGBoostJob{
 				Spec: XGBoostJobSpec{
-					XGBReplicaSpecs: map[commonv1.ReplicaType]*commonv1.ReplicaSpec{
-						XGBoostJobReplicaTypeWorker: &commonv1.ReplicaSpec{
+					XGBReplicaSpecs: map[ReplicaType]*ReplicaSpec{
+						XGBoostJobReplicaTypeWorker: {
 							Template: corev1.PodTemplateSpec{
 								Spec: corev1.PodSpec{
 									Containers: []corev1.Container{
-										corev1.Container{
+										{
 											Name:  XGBoostJobDefaultContainerName,
 											Image: testImage,
 											Ports: []corev1.ContainerPort{
-												corev1.ContainerPort{
+												{
 													Name:          XGBoostJobDefaultPortName,
 													ContainerPort: 9999,
 												},
@@ -196,20 +195,20 @@ func TestSetDefaults_XGBoostJob(t *testing.T) {
 					},
 				},
 			},
-			expected: expectedXGBoostJob(commonv1.CleanPodPolicyNone, XGBoostJobDefaultRestartPolicy, 1, XGBoostJobDefaultPortName, 9999),
+			expected: expectedXGBoostJob(CleanPodPolicyNone, XGBoostJobDefaultRestartPolicy, 1, XGBoostJobDefaultPortName, 9999),
 		},
 		"set spec with cleanpod policy": {
 			original: &XGBoostJob{
 				Spec: XGBoostJobSpec{
-					RunPolicy: commonv1.RunPolicy{
-						CleanPodPolicy: cleanPodPolicyPointer(commonv1.CleanPodPolicyAll),
+					RunPolicy: RunPolicy{
+						CleanPodPolicy: CleanPodPolicyPointer(CleanPodPolicyAll),
 					},
-					XGBReplicaSpecs: map[commonv1.ReplicaType]*commonv1.ReplicaSpec{
-						XGBoostJobReplicaTypeWorker: &commonv1.ReplicaSpec{
+					XGBReplicaSpecs: map[ReplicaType]*ReplicaSpec{
+						XGBoostJobReplicaTypeWorker: {
 							Template: corev1.PodTemplateSpec{
 								Spec: corev1.PodSpec{
 									Containers: []corev1.Container{
-										corev1.Container{
+										{
 											Name:  XGBoostJobDefaultContainerName,
 											Image: testImage,
 										},
@@ -220,7 +219,7 @@ func TestSetDefaults_XGBoostJob(t *testing.T) {
 					},
 				},
 			},
-			expected: expectedXGBoostJob(commonv1.CleanPodPolicyAll, XGBoostJobDefaultRestartPolicy, 1, XGBoostJobDefaultPortName, XGBoostJobDefaultPort),
+			expected: expectedXGBoostJob(CleanPodPolicyAll, XGBoostJobDefaultRestartPolicy, 1, XGBoostJobDefaultPortName, XGBoostJobDefaultPort),
 		},
 	}
 

@@ -10,8 +10,8 @@ spec:
       template:
         spec:
           containers:
-          - name: xgboostjob
-            image: docker.io/merlintang/xgboost-dist-iris:1.1
+          - name: xgboost
+            image: docker.io/kubeflow/xgboost-dist-iris:latest
             ports:
             - containerPort: 9991
               name: xgboostjob-port
@@ -29,8 +29,8 @@ spec:
       template:
         spec:
           containers:
-          - name: xgboostjob
-            image: docker.io/merlintang/xgboost-dist-iris:1.1
+          - name: xgboost
+            image: docker.io/kubeflow/xgboost-dist-iris:latest
             ports:
             - containerPort: 9991
               name: xgboostjob-port
@@ -40,5 +40,3 @@ spec:
               - --xgboost_parameter="objective:multi:softprob,num_class:3"
               - --n_estimators=10
               - --learning_rate=0.1
-
-

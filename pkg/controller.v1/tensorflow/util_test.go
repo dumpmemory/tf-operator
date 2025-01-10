@@ -17,19 +17,18 @@ package tensorflow
 import (
 	"testing"
 
-	commonv1 "github.com/kubeflow/common/pkg/apis/common/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/uuid"
 
 	kubeflowv1 "github.com/kubeflow/training-operator/pkg/apis/kubeflow.org/v1"
+	tftestutil "github.com/kubeflow/training-operator/pkg/controller.v1/tensorflow/testutil"
 )
 
 func TestGenOwnerReference(t *testing.T) {
-	testName := "test-tfjob"
 	testUID := uuid.NewUUID()
 	tfJob := &kubeflowv1.TFJob{
 		ObjectMeta: metav1.ObjectMeta{
-			Name: testName,
+			Name: tftestutil.TestTFJobName,
 			UID:  testUID,
 		},
 	}
@@ -38,8 +37,8 @@ func TestGenOwnerReference(t *testing.T) {
 	if ref.UID != testUID {
 		t.Errorf("Expected UID %s, got %s", testUID, ref.UID)
 	}
-	if ref.Name != testName {
-		t.Errorf("Expected Name %s, got %s", testName, ref.Name)
+	if ref.Name != tftestutil.TestTFJobName {
+		t.Errorf("Expected Name %s, got %s", tftestutil.TestTFJobName, ref.Name)
 	}
 	if ref.APIVersion != kubeflowv1.SchemeGroupVersion.String() {
 		t.Errorf("Expected APIVersion %s, got %s", kubeflowv1.SchemeGroupVersion.String(), ref.APIVersion)
@@ -51,14 +50,14 @@ func TestGenLabels(t *testing.T) {
 	expctedVal := "test-key"
 
 	labels := reconciler.GenLabels(testJobName)
-	jobNameLabel := commonv1.JobNameLabel
+	jobNameLabel := kubeflowv1.JobNameLabel
 
 	if labels[jobNameLabel] != expctedVal {
 		t.Errorf("Expected %s %s, got %s", jobNameLabel, expctedVal, jobNameLabel)
 	}
 
-	if labels[commonv1.OperatorNameLabel] != controllerName {
-		t.Errorf("Expected %s %s, got %s", commonv1.OperatorNameLabel, controllerName,
-			labels[commonv1.OperatorNameLabel])
+	if labels[kubeflowv1.OperatorNameLabel] != controllerName {
+		t.Errorf("Expected %s %s, got %s", kubeflowv1.OperatorNameLabel, controllerName,
+			labels[kubeflowv1.OperatorNameLabel])
 	}
 }

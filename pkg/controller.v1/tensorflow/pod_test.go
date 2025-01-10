@@ -18,10 +18,8 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"time"
 
-	commonv1 "github.com/kubeflow/common/pkg/apis/common/v1"
-	"github.com/kubeflow/common/pkg/core"
+	"github.com/google/go-cmp/cmp/cmpopts"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	corev1 "k8s.io/api/core/v1"
@@ -32,15 +30,13 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	kubeflowv1 "github.com/kubeflow/training-operator/pkg/apis/kubeflow.org/v1"
-	"github.com/kubeflow/training-operator/pkg/common/util/v1/testutil"
+	tftestutil "github.com/kubeflow/training-operator/pkg/controller.v1/tensorflow/testutil"
+	"github.com/kubeflow/training-operator/pkg/core"
+	commonutil "github.com/kubeflow/training-operator/pkg/util"
+	"github.com/kubeflow/training-operator/pkg/util/testutil"
 )
 
 var _ = Describe("TFJob controller", func() {
-	const (
-		timeout  = 10 * time.Second
-		interval = 1000 * time.Millisecond
-	)
-
 	Context("Test ClusterSpec", func() {
 		It("should generate desired cluster spec", func() {
 			type tc struct {
@@ -52,52 +48,52 @@ var _ = Describe("TFJob controller", func() {
 			}
 			testCase := []tc{
 				{
-					tfJob:               testutil.NewTFJobWithNamespace(1, 0, "ns0"),
+					tfJob:               tftestutil.NewTFJobWithNamespace(1, 0, "ns0"),
 					rt:                  "worker",
 					index:               "0",
 					customClusterDomain: "",
 					expectedClusterSpec: "",
 				},
 				{
-					tfJob:               testutil.NewTFJobWithNamespace(1, 0, "ns1"),
+					tfJob:               tftestutil.NewTFJobWithNamespace(1, 0, "ns1"),
 					rt:                  "worker",
 					index:               "0",
 					customClusterDomain: "tf.training.com",
 					expectedClusterSpec: "",
 				},
 				{
-					tfJob:               testutil.NewTFJobWithNamespace(1, 1, "ns2"),
+					tfJob:               tftestutil.NewTFJobWithNamespace(1, 1, "ns2"),
 					rt:                  "worker",
 					index:               "0",
 					customClusterDomain: "tf.training.org",
-					expectedClusterSpec: `{"cluster":{"ps":["` + testutil.TestTFJobName +
-						`-ps-0.ns2.svc.tf.training.org:2222"],"worker":["` + testutil.TestTFJobName +
+					expectedClusterSpec: `{"cluster":{"ps":["` + tftestutil.TestTFJobName +
+						`-ps-0.ns2.svc.tf.training.org:2222"],"worker":["` + tftestutil.TestTFJobName +
 						`-worker-0.ns2.svc.tf.training.org:2222"]},"task":{"type":"worker","index":0},"environment":"cloud"}`,
 				},
 				{
-					tfJob:               testutil.NewTFJobWithEvaluatorAndNamespace(1, 1, 1, "ns3"),
+					tfJob:               tftestutil.NewTFJobWithEvaluatorAndNamespace(1, 1, 1, "ns3"),
 					rt:                  "worker",
 					index:               "0",
 					customClusterDomain: "tf.training.io",
-					expectedClusterSpec: `{"cluster":{"evaluator":["` + testutil.TestTFJobName +
-						`-evaluator-0.ns3.svc.tf.training.io:2222"],"ps":["` + testutil.TestTFJobName +
-						`-ps-0.ns3.svc.tf.training.io:2222"],"worker":["` + testutil.TestTFJobName +
+					expectedClusterSpec: `{"cluster":{"evaluator":["` + tftestutil.TestTFJobName +
+						`-evaluator-0.ns3.svc.tf.training.io:2222"],"ps":["` + tftestutil.TestTFJobName +
+						`-ps-0.ns3.svc.tf.training.io:2222"],"worker":["` + tftestutil.TestTFJobName +
 						`-worker-0.ns3.svc.tf.training.io:2222"]},"task":{"type":"worker","index":0},"environment":"cloud"}`,
 				},
 				{
-					tfJob:               testutil.NewTFJobWithEvaluatorAndNamespace(1, 1, 1, "ns3"),
+					tfJob:               tftestutil.NewTFJobWithEvaluatorAndNamespace(1, 1, 1, "ns3"),
 					rt:                  "worker",
 					index:               "0",
 					customClusterDomain: "",
-					expectedClusterSpec: `{"cluster":{"evaluator":["` + testutil.TestTFJobName +
-						`-evaluator-0.ns3.svc:2222"],"ps":["` + testutil.TestTFJobName +
-						`-ps-0.ns3.svc:2222"],"worker":["` + testutil.TestTFJobName +
+					expectedClusterSpec: `{"cluster":{"evaluator":["` + tftestutil.TestTFJobName +
+						`-evaluator-0.ns3.svc:2222"],"ps":["` + tftestutil.TestTFJobName +
+						`-ps-0.ns3.svc:2222"],"worker":["` + tftestutil.TestTFJobName +
 						`-worker-0.ns3.svc:2222"]},"task":{"type":"worker","index":0},"environment":"cloud"}`,
 				},
 			}
 
 			for _, c := range testCase {
-				c.tfJob.SetName("test-tfjob")
+				c.tfJob.SetName(tftestutil.TestTFJobName)
 				c.tfJob.SetUID(uuid.NewUUID())
 				_ = os.Setenv(EnvCustomClusterDomain, c.customClusterDomain)
 
@@ -111,8 +107,8 @@ var _ = Describe("TFJob controller", func() {
 
 				jobName := c.tfJob.GetName()
 				labels := reconciler.GenLabels(jobName)
-				labels[commonv1.ReplicaTypeLabel] = c.rt
-				labels[commonv1.ReplicaIndexLabel] = c.index
+				labels[kubeflowv1.ReplicaTypeLabel] = c.rt
+				labels[kubeflowv1.ReplicaIndexLabel] = c.index
 
 				Expect(reconciler.SetClusterSpec(c.tfJob, podTemplate, c.rt, c.index)).Should(Succeed())
 
@@ -135,19 +131,19 @@ var _ = Describe("TFJob controller", func() {
 			}
 			testCase := []tc{
 				{
-					tfJob:    testutil.NewTFJob(1, 0),
+					tfJob:    tftestutil.NewTFJob(1, 0),
 					expected: false,
 				},
 				{
-					tfJob:    testutil.NewTFJob(1, 1),
+					tfJob:    tftestutil.NewTFJob(1, 1),
 					expected: true,
 				},
 				{
-					tfJob:    testutil.NewTFJob(0, 1),
+					tfJob:    tftestutil.NewTFJob(0, 1),
 					expected: false,
 				},
 				{
-					tfJob:    testutil.NewTFJobWithChief(1, 0),
+					tfJob:    tftestutil.NewTFJobWithChief(1, 0),
 					expected: true,
 				},
 			}
@@ -162,12 +158,12 @@ var _ = Describe("TFJob controller", func() {
 			type tc struct {
 				tfJob                 *kubeflowv1.TFJob
 				expectedRestartPolicy corev1.RestartPolicy
-				expectedType          commonv1.ReplicaType
+				expectedType          kubeflowv1.ReplicaType
 			}
 			testCase := []tc{
 				func() tc {
-					tfJob := testutil.NewTFJob(1, 0)
-					specRestartPolicy := commonv1.RestartPolicyExitCode
+					tfJob := tftestutil.NewTFJob(1, 0)
+					specRestartPolicy := kubeflowv1.RestartPolicyExitCode
 					tfJob.Spec.TFReplicaSpecs[kubeflowv1.TFJobReplicaTypeWorker].RestartPolicy = specRestartPolicy
 					return tc{
 						tfJob:                 tfJob,
@@ -176,8 +172,8 @@ var _ = Describe("TFJob controller", func() {
 					}
 				}(),
 				func() tc {
-					tfJob := testutil.NewTFJob(1, 0)
-					specRestartPolicy := commonv1.RestartPolicyNever
+					tfJob := tftestutil.NewTFJob(1, 0)
+					specRestartPolicy := kubeflowv1.RestartPolicyNever
 					tfJob.Spec.TFReplicaSpecs[kubeflowv1.TFJobReplicaTypeWorker].RestartPolicy = specRestartPolicy
 					return tc{
 						tfJob:                 tfJob,
@@ -186,8 +182,8 @@ var _ = Describe("TFJob controller", func() {
 					}
 				}(),
 				func() tc {
-					tfJob := testutil.NewTFJob(1, 0)
-					specRestartPolicy := commonv1.RestartPolicyAlways
+					tfJob := tftestutil.NewTFJob(1, 0)
+					specRestartPolicy := kubeflowv1.RestartPolicyAlways
 					tfJob.Spec.TFReplicaSpecs[kubeflowv1.TFJobReplicaTypeWorker].RestartPolicy = specRestartPolicy
 					return tc{
 						tfJob:                 tfJob,
@@ -196,8 +192,8 @@ var _ = Describe("TFJob controller", func() {
 					}
 				}(),
 				func() tc {
-					tfJob := testutil.NewTFJob(1, 0)
-					specRestartPolicy := commonv1.RestartPolicyOnFailure
+					tfJob := tftestutil.NewTFJob(1, 0)
+					specRestartPolicy := kubeflowv1.RestartPolicyOnFailure
 					tfJob.Spec.TFReplicaSpecs[kubeflowv1.TFJobReplicaTypeWorker].RestartPolicy = specRestartPolicy
 					return tc{
 						tfJob:                 tfJob,
@@ -220,23 +216,23 @@ var _ = Describe("TFJob controller", func() {
 			By("Creating TFJob \"test-exit-code\" with 1 worker only")
 			ctx := context.Background()
 
-			tfJob := testutil.NewTFJob(1, 0)
+			tfJob := tftestutil.NewTFJob(1, 0)
 			tfJob.SetName("test-exit-code")
 			tfJob.SetUID(uuid.NewUUID())
-			tfJob.Spec.TFReplicaSpecs[kubeflowv1.TFJobReplicaTypeWorker].RestartPolicy = commonv1.RestartPolicyExitCode
+			tfJob.Spec.TFReplicaSpecs[kubeflowv1.TFJobReplicaTypeWorker].RestartPolicy = kubeflowv1.RestartPolicyExitCode
 
 			refs := []metav1.OwnerReference{
 				*reconciler.GenOwnerReference(tfJob),
 			}
 			By("creating worker Pod")
-			pod := testutil.NewPod(tfJob, testutil.LabelWorker, 0, refs)
+			pod := tftestutil.NewPod(tfJob, kubeflowv1.TFJobReplicaTypeWorker, 0, refs)
 			basicLabels := reconciler.GenLabels(tfJob.GetName())
 			for k, v := range basicLabels {
 				pod.Labels[k] = v
 			}
 			pod.Spec.Containers = append(pod.Spec.Containers, corev1.Container{
 				Name:  kubeflowv1.TFJobDefaultContainerName,
-				Image: testutil.DummyContainerImage,
+				Image: tftestutil.DummyContainerImage,
 			})
 			Expect(testK8sClient.Create(ctx, pod)).Should(Succeed())
 
@@ -264,7 +260,7 @@ var _ = Describe("TFJob controller", func() {
 					return fmt.Errorf("pod status is not Failed")
 				}
 				return nil
-			}, timeout, interval).Should(BeNil())
+			}, testutil.Timeout, testutil.Interval).Should(BeNil())
 
 			_ = reconciler.ReconcileJobs(tfJob, tfJob.Spec.TFReplicaSpecs, tfJob.Status, &tfJob.Spec.RunPolicy)
 
@@ -276,7 +272,50 @@ var _ = Describe("TFJob controller", func() {
 					return noPod.GetDeletionTimestamp() != nil
 				}
 				return errors.IsNotFound(err)
-			}, timeout, interval).Should(BeTrue())
+			}, testutil.Timeout, testutil.Interval).Should(BeTrue())
+		})
+	})
+
+	Context("Test Unretryable Exit Code", func() {
+		It("should set the job status to Failed", func() {
+			By("Creating TFJob \"test-noretry-exit-code\" with 1 worker only")
+			ctx := context.Background()
+
+			tfJob := tftestutil.NewTFJob(1, 0)
+			tfJob.SetName("test-noretry-exit-code")
+			tfJob.SetUID(uuid.NewUUID())
+			tfJob.Spec.TFReplicaSpecs[kubeflowv1.TFJobReplicaTypeWorker].RestartPolicy = kubeflowv1.RestartPolicyExitCode
+			Expect(testK8sClient.Create(ctx, tfJob)).Should(Succeed())
+
+			_ = reconciler.ReconcileJobs(tfJob, tfJob.Spec.TFReplicaSpecs, tfJob.Status, &tfJob.Spec.RunPolicy)
+
+			created := &corev1.Pod{}
+			key := types.NamespacedName{Namespace: metav1.NamespaceDefault, Name: "test-noretry-exit-code-worker-0"}
+			Expect(testK8sClient.Get(ctx, key, created)).Should(Succeed())
+			created.Status.Phase = corev1.PodFailed
+			created.Status.ContainerStatuses = append(created.Status.ContainerStatuses, corev1.ContainerStatus{
+				Name: kubeflowv1.TFJobDefaultContainerName,
+				State: corev1.ContainerState{
+					Terminated: &corev1.ContainerStateTerminated{
+						ExitCode: 1,
+					},
+				},
+			})
+			Expect(testK8sClient.Status().Update(ctx, created)).Should(Succeed())
+
+			_ = reconciler.ReconcileJobs(tfJob, tfJob.Spec.TFReplicaSpecs, tfJob.Status, &tfJob.Spec.RunPolicy)
+
+			Eventually(func(g Gomega) {
+				updatedJob := &kubeflowv1.TFJob{}
+				g.Expect(testK8sClient.Get(ctx, types.NamespacedName{Name: tfJob.GetName(), Namespace: metav1.NamespaceDefault}, updatedJob)).Should(Succeed())
+				g.Expect(updatedJob.Status.Conditions).Should(ContainElements(BeComparableTo(kubeflowv1.JobCondition{
+					Type:    kubeflowv1.JobFailed,
+					Status:  corev1.ConditionTrue,
+					Reason:  commonutil.NewReason(kubeflowv1.TFJobKind, commonutil.JobFailedReason),
+					Message: fmt.Sprintf("job %q is failing because %q replica(s) failed.", updatedJob.Name, kubeflowv1.TFJobReplicaTypeWorker),
+				}, cmpopts.IgnoreFields(kubeflowv1.JobCondition{}, "LastUpdateTime", "LastTransitionTime"))), "TFJob should be in Failed state")
+			}, testutil.Timeout, testutil.Interval).Should(Succeed())
+
 		})
 	})
 
@@ -284,7 +323,7 @@ var _ = Describe("TFJob controller", func() {
 		It("should delete redundant Pods", func() {
 			ctx := context.Background()
 
-			tfJob := testutil.NewTFJob(2, 0)
+			tfJob := tftestutil.NewTFJob(2, 0)
 			//tfJob.SelfLink = "/api/v1/namespaces/default/tfjob/test-tfjob"
 			tfJob.SetName("test-scale-down")
 			tfJob.SetUID(uuid.NewUUID())
@@ -293,9 +332,9 @@ var _ = Describe("TFJob controller", func() {
 			refs := []metav1.OwnerReference{*reconciler.GenOwnerReference(tfJob)}
 
 			pods := []*corev1.Pod{
-				testutil.NewPod(tfJob, testutil.LabelWorker, 0, refs),
-				testutil.NewPod(tfJob, testutil.LabelWorker, 1, refs),
-				testutil.NewPod(tfJob, testutil.LabelWorker, 2, refs),
+				tftestutil.NewPod(tfJob, kubeflowv1.TFJobReplicaTypeWorker, 0, refs),
+				tftestutil.NewPod(tfJob, kubeflowv1.TFJobReplicaTypeWorker, 1, refs),
+				tftestutil.NewPod(tfJob, kubeflowv1.TFJobReplicaTypeWorker, 2, refs),
 			}
 
 			for i := range pods {
@@ -326,7 +365,7 @@ var _ = Describe("TFJob controller", func() {
 					return fmt.Errorf("expecting %d Pods while got %d", 3, len(podList.Items))
 				}
 				return nil
-			}, timeout, interval).Should(BeNil())
+			}, testutil.Timeout, testutil.Interval).Should(BeNil())
 
 			_ = reconciler.ReconcileJobs(tfJob, tfJob.Spec.TFReplicaSpecs, tfJob.Status, &tfJob.Spec.RunPolicy)
 
@@ -341,7 +380,7 @@ var _ = Describe("TFJob controller", func() {
 					return false
 				}
 				return errors.IsNotFound(err)
-			}, timeout, interval).Should(BeTrue())
+			}, testutil.Timeout, testutil.Interval).Should(BeTrue())
 		})
 	})
 
@@ -349,7 +388,7 @@ var _ = Describe("TFJob controller", func() {
 		It("should create missing Pods", func() {
 			ctx := context.Background()
 
-			tfJob := testutil.NewTFJob(3, 0)
+			tfJob := tftestutil.NewTFJob(3, 0)
 			tfJob.SetName("test-scale-up")
 			tfJob.SetUID(uuid.NewUUID())
 			tfJob.Spec.EnableDynamicWorker = true
@@ -357,7 +396,7 @@ var _ = Describe("TFJob controller", func() {
 			refs := []metav1.OwnerReference{*reconciler.GenOwnerReference(tfJob)}
 
 			pods := []*corev1.Pod{
-				testutil.NewPod(tfJob, testutil.LabelWorker, 0, refs),
+				tftestutil.NewPod(tfJob, kubeflowv1.TFJobReplicaTypeWorker, 0, refs),
 			}
 
 			for i := range pods {
@@ -388,7 +427,7 @@ var _ = Describe("TFJob controller", func() {
 					return fmt.Errorf("before reconciling, expecting %d Pods while got %d", 1, len(podList.Items))
 				}
 				return nil
-			}, timeout, interval).Should(BeNil())
+			}, testutil.Timeout, testutil.Interval).Should(BeNil())
 
 			_ = reconciler.ReconcileJobs(tfJob, tfJob.Spec.TFReplicaSpecs, tfJob.Status, &tfJob.Spec.RunPolicy)
 
@@ -412,7 +451,7 @@ var _ = Describe("TFJob controller", func() {
 					return fmt.Errorf("after reconciling, expecting %d Pods while got %d", 3, len(podList.Items))
 				}
 				return nil
-			}, timeout, interval).Should(BeNil())
+			}, testutil.Timeout, testutil.Interval).Should(BeNil())
 		})
 	})
 
@@ -425,83 +464,83 @@ var _ = Describe("TFJob controller", func() {
 				// worker failed, succeeded, running num
 				workers     [3]int32
 				tfJob       *kubeflowv1.TFJob
-				replicas    map[commonv1.ReplicaType]*commonv1.ReplicaSpec
+				replicas    map[kubeflowv1.ReplicaType]*kubeflowv1.ReplicaSpec
 				expected    bool
 				expectedErr bool
 			}{
 				{
 					workers:     [3]int32{0, 0, 1},
-					tfJob:       testutil.NewTFJobV2(1, 1, 0, 0, 0),
+					tfJob:       tftestutil.NewTFJobV2(1, 1, 0, 0, 0),
 					expected:    false,
 					expectedErr: false,
-					replicas: map[commonv1.ReplicaType]*commonv1.ReplicaSpec{
+					replicas: map[kubeflowv1.ReplicaType]*kubeflowv1.ReplicaSpec{
 						kubeflowv1.TFJobReplicaTypeWorker: {
 							Replicas: newInt32(1),
-							Template: testutil.NewTFReplicaSpecTemplate(),
+							Template: tftestutil.NewTFReplicaSpecTemplate(),
 						},
 						kubeflowv1.TFJobReplicaTypePS: {
 							Replicas: newInt32(1),
-							Template: testutil.NewTFReplicaSpecTemplate(),
+							Template: tftestutil.NewTFReplicaSpecTemplate(),
 						},
 					},
 				},
 				{
 					workers:     [3]int32{0, 1, 0},
-					tfJob:       testutil.NewTFJobV2(1, 0, 0, 0, 0),
+					tfJob:       tftestutil.NewTFJobV2(1, 0, 0, 0, 0),
 					expected:    true,
 					expectedErr: false,
-					replicas: map[commonv1.ReplicaType]*commonv1.ReplicaSpec{
+					replicas: map[kubeflowv1.ReplicaType]*kubeflowv1.ReplicaSpec{
 						kubeflowv1.TFJobReplicaTypeWorker: {
 							Replicas: newInt32(1),
-							Template: testutil.NewTFReplicaSpecTemplate(),
+							Template: tftestutil.NewTFReplicaSpecTemplate(),
 						},
 					},
 				},
 				{
 					workers:     [3]int32{0, 0, 0},
-					tfJob:       testutil.NewTFJobV2(0, 0, 1, 0, 0),
+					tfJob:       tftestutil.NewTFJobV2(0, 0, 1, 0, 0),
 					expected:    true,
 					expectedErr: false,
-					replicas: map[commonv1.ReplicaType]*commonv1.ReplicaSpec{
+					replicas: map[kubeflowv1.ReplicaType]*kubeflowv1.ReplicaSpec{
 						kubeflowv1.TFJobReplicaTypeMaster: {
 							Replicas: newInt32(1),
-							Template: testutil.NewTFReplicaSpecTemplate(),
+							Template: tftestutil.NewTFReplicaSpecTemplate(),
 						},
 					},
 				},
 				{
 					workers:     [3]int32{0, 0, 0},
-					tfJob:       testutil.NewTFJobV2(0, 0, 0, 1, 0),
+					tfJob:       tftestutil.NewTFJobV2(0, 0, 0, 1, 0),
 					expected:    true,
 					expectedErr: false,
-					replicas: map[commonv1.ReplicaType]*commonv1.ReplicaSpec{
+					replicas: map[kubeflowv1.ReplicaType]*kubeflowv1.ReplicaSpec{
 						kubeflowv1.TFJobReplicaTypeChief: {
 							Replicas: newInt32(1),
-							Template: testutil.NewTFReplicaSpecTemplate(),
+							Template: tftestutil.NewTFReplicaSpecTemplate(),
 						},
 					},
 				},
 				{
 					workers:     [3]int32{1, 1, 0},
-					tfJob:       testutil.NewTFJobV2(2, 0, 0, 0, 0),
+					tfJob:       tftestutil.NewTFJobV2(2, 0, 0, 0, 0),
 					expected:    true,
 					expectedErr: false,
-					replicas: map[commonv1.ReplicaType]*commonv1.ReplicaSpec{
+					replicas: map[kubeflowv1.ReplicaType]*kubeflowv1.ReplicaSpec{
 						kubeflowv1.TFJobReplicaTypeWorker: {
 							Replicas: newInt32(2),
-							Template: testutil.NewTFReplicaSpecTemplate(),
+							Template: tftestutil.NewTFReplicaSpecTemplate(),
 						},
 					},
 				},
 				{
 					workers:     [3]int32{1, 0, 1},
-					tfJob:       testutil.NewTFJobV2(2, 0, 0, 0, 0),
+					tfJob:       tftestutil.NewTFJobV2(2, 0, 0, 0, 0),
 					expected:    false,
 					expectedErr: false,
-					replicas: map[commonv1.ReplicaType]*commonv1.ReplicaSpec{
+					replicas: map[kubeflowv1.ReplicaType]*kubeflowv1.ReplicaSpec{
 						kubeflowv1.TFJobReplicaTypeWorker: {
 							Replicas: newInt32(2),
-							Template: testutil.NewTFReplicaSpecTemplate(),
+							Template: tftestutil.NewTFReplicaSpecTemplate(),
 						},
 					},
 				},
@@ -538,7 +577,7 @@ var _ = Describe("TFJob controller", func() {
 							len(podList.Items), tt.tfJob.GetName(), totalExpectedPodCount)
 					}
 					return nil
-				}, timeout, interval).Should(BeNil())
+				}, testutil.Timeout, testutil.Interval).Should(BeNil())
 
 				got, err := reconciler.IsWorker0Completed(tt.tfJob, tt.replicas)
 

@@ -5,9 +5,7 @@ import (
 
 	"github.com/onsi/ginkgo/v2"
 	"github.com/onsi/gomega"
-	"k8s.io/utils/pointer"
-
-	commonv1 "github.com/kubeflow/common/pkg/apis/common/v1"
+	"k8s.io/utils/ptr"
 )
 
 func TestSetElasticPolicy(t *testing.T) {
@@ -31,17 +29,17 @@ func TestSetElasticPolicy(t *testing.T) {
 				job: &PyTorchJob{
 					Spec: PyTorchJobSpec{
 						ElasticPolicy: &ElasticPolicy{},
-						PyTorchReplicaSpecs: map[commonv1.ReplicaType]*commonv1.ReplicaSpec{
+						PyTorchReplicaSpecs: map[ReplicaType]*ReplicaSpec{
 							PyTorchJobReplicaTypeWorker: {
-								Replicas: pointer.Int32(1),
+								Replicas: ptr.To[int32](1),
 							},
 						},
 					},
 				},
 			},
 			result: result{
-				expectedMinReplicas: pointer.Int32(1),
-				expectedMaxReplicas: pointer.Int32(1),
+				expectedMinReplicas: ptr.To[int32](1),
+				expectedMaxReplicas: ptr.To[int32](1),
 			},
 		},
 		{
@@ -50,20 +48,20 @@ func TestSetElasticPolicy(t *testing.T) {
 				job: &PyTorchJob{
 					Spec: PyTorchJobSpec{
 						ElasticPolicy: &ElasticPolicy{
-							MaxReplicas: pointer.Int32(1),
-							MinReplicas: pointer.Int32(1),
+							MaxReplicas: ptr.To[int32](1),
+							MinReplicas: ptr.To[int32](1),
 						},
-						PyTorchReplicaSpecs: map[commonv1.ReplicaType]*commonv1.ReplicaSpec{
+						PyTorchReplicaSpecs: map[ReplicaType]*ReplicaSpec{
 							PyTorchJobReplicaTypeWorker: {
-								Replicas: pointer.Int32(1),
+								Replicas: ptr.To[int32](1),
 							},
 						},
 					},
 				},
 			},
 			result: result{
-				expectedMinReplicas: pointer.Int32(1),
-				expectedMaxReplicas: pointer.Int32(1),
+				expectedMinReplicas: ptr.To[int32](1),
+				expectedMaxReplicas: ptr.To[int32](1),
 			},
 		},
 		{
@@ -72,20 +70,20 @@ func TestSetElasticPolicy(t *testing.T) {
 				job: &PyTorchJob{
 					Spec: PyTorchJobSpec{
 						ElasticPolicy: &ElasticPolicy{
-							MaxReplicas: pointer.Int32(1),
-							MinReplicas: pointer.Int32(1),
+							MaxReplicas: ptr.To[int32](1),
+							MinReplicas: ptr.To[int32](1),
 						},
-						PyTorchReplicaSpecs: map[commonv1.ReplicaType]*commonv1.ReplicaSpec{
+						PyTorchReplicaSpecs: map[ReplicaType]*ReplicaSpec{
 							PyTorchJobReplicaTypeWorker: {
-								Replicas: pointer.Int32(1),
+								Replicas: ptr.To[int32](1),
 							},
 						},
 					},
 				},
 			},
 			result: result{
-				expectedMinReplicas: pointer.Int32(1),
-				expectedMaxReplicas: pointer.Int32(1),
+				expectedMinReplicas: ptr.To[int32](1),
+				expectedMaxReplicas: ptr.To[int32](1),
 			},
 		},
 		{
@@ -94,20 +92,20 @@ func TestSetElasticPolicy(t *testing.T) {
 				job: &PyTorchJob{
 					Spec: PyTorchJobSpec{
 						ElasticPolicy: &ElasticPolicy{
-							MaxReplicas: pointer.Int32(1),
+							MaxReplicas: ptr.To[int32](1),
 							MinReplicas: nil,
 						},
-						PyTorchReplicaSpecs: map[commonv1.ReplicaType]*commonv1.ReplicaSpec{
+						PyTorchReplicaSpecs: map[ReplicaType]*ReplicaSpec{
 							PyTorchJobReplicaTypeWorker: {
-								Replicas: pointer.Int32(1),
+								Replicas: ptr.To[int32](1),
 							},
 						},
 					},
 				},
 			},
 			result: result{
-				expectedMinReplicas: pointer.Int32(1),
-				expectedMaxReplicas: pointer.Int32(1),
+				expectedMinReplicas: ptr.To[int32](1),
+				expectedMaxReplicas: ptr.To[int32](1),
 			},
 		},
 		{
@@ -117,19 +115,19 @@ func TestSetElasticPolicy(t *testing.T) {
 					Spec: PyTorchJobSpec{
 						ElasticPolicy: &ElasticPolicy{
 							MaxReplicas: nil,
-							MinReplicas: pointer.Int32(1),
+							MinReplicas: ptr.To[int32](1),
 						},
-						PyTorchReplicaSpecs: map[commonv1.ReplicaType]*commonv1.ReplicaSpec{
+						PyTorchReplicaSpecs: map[ReplicaType]*ReplicaSpec{
 							PyTorchJobReplicaTypeWorker: {
-								Replicas: pointer.Int32(1),
+								Replicas: ptr.To[int32](1),
 							},
 						},
 					},
 				},
 			},
 			result: result{
-				expectedMinReplicas: pointer.Int32(1),
-				expectedMaxReplicas: pointer.Int32(1),
+				expectedMinReplicas: ptr.To[int32](1),
+				expectedMaxReplicas: ptr.To[int32](1),
 			},
 		},
 	}
@@ -153,4 +151,42 @@ func TestSetElasticPolicy(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestSetDefaultNprocPerNode(t *testing.T) {
+	gomega.RegisterFailHandler(ginkgo.Fail)
+	t.Run("test default nproc per node", func(t *testing.T) {
+		job := &PyTorchJob{
+			Spec: PyTorchJobSpec{
+				ElasticPolicy: &ElasticPolicy{
+					NProcPerNode: nil,
+				},
+				PyTorchReplicaSpecs: map[ReplicaType]*ReplicaSpec{
+					PyTorchJobReplicaTypeWorker: {
+						Replicas: ptr.To[int32](1),
+					},
+				},
+			},
+		}
+
+		setDefaultNprocPerNode(job)
+		gomega.Expect(job.Spec.NprocPerNode).
+			To(gomega.Equal(&DefaultNprocPerNode))
+	})
+	t.Run("test default nproc per node", func(t *testing.T) {
+		job := &PyTorchJob{
+			Spec: PyTorchJobSpec{
+				ElasticPolicy: nil,
+				PyTorchReplicaSpecs: map[ReplicaType]*ReplicaSpec{
+					PyTorchJobReplicaTypeWorker: {
+						Replicas: ptr.To[int32](1),
+					},
+				},
+			},
+		}
+
+		setDefaultNprocPerNode(job)
+		gomega.Expect(job.Spec.NprocPerNode).
+			To(gomega.Equal(&DefaultNprocPerNode))
+	})
 }

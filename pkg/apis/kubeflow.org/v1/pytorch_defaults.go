@@ -17,19 +17,21 @@ package v1
 import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
-
-	commonv1 "github.com/kubeflow/common/pkg/apis/common/v1"
 )
 
-func addPytorchDefaultingFuncs(scheme *runtime.Scheme) error {
+var (
+	DefaultNprocPerNode = "auto"
+)
+
+func addPyTorchDefaultingFuncs(scheme *runtime.Scheme) error {
 	return RegisterDefaults(scheme)
 }
 
-// setPytorchDefaultPort sets the default ports for pytorch container.
-func setPytorchDefaultPort(spec *corev1.PodSpec) {
-	index := getDefaultContainerIndex(spec, PytorchJobDefaultContainerName)
-	if ok := hasDefaultPort(spec, index, PytorchJobDefaultPortName); !ok {
-		setDefaultPort(spec, PytorchJobDefaultPortName, PytorchJobDefaultPort, index)
+// setPyTorchDefaultPort sets the default ports for pytorch container.
+func setPyTorchDefaultPort(spec *corev1.PodSpec) {
+	index := getDefaultContainerIndex(spec, PyTorchJobDefaultContainerName)
+	if ok := hasDefaultPort(spec, index, PyTorchJobDefaultPortName); !ok {
+		setDefaultPort(spec, PyTorchJobDefaultPortName, PyTorchJobDefaultPort, index)
 	}
 }
 
@@ -52,9 +54,9 @@ func setElasticPolicy(pytorchJob *PyTorchJob) {
 	}
 }
 
-// setPytorchTypeNamesToCamelCase sets the name of all replica types from any case to correct case.
-func setPytorchTypeNamesToCamelCase(pytorchJob *PyTorchJob) {
-	replicaTypes := []commonv1.ReplicaType{
+// setPyTorchTypeNamesToCamelCase sets the name of all replica types from any case to correct case.
+func setPyTorchTypeNamesToCamelCase(pytorchJob *PyTorchJob) {
+	replicaTypes := []ReplicaType{
 		PyTorchJobReplicaTypeMaster,
 		PyTorchJobReplicaTypeWorker,
 	}
@@ -63,22 +65,32 @@ func setPytorchTypeNamesToCamelCase(pytorchJob *PyTorchJob) {
 	}
 }
 
+func setDefaultNprocPerNode(job *PyTorchJob) {
+	if (job.Spec.ElasticPolicy != nil && job.Spec.ElasticPolicy.NProcPerNode == nil) || (job.Spec.ElasticPolicy == nil) {
+		if job.Spec.NprocPerNode == nil {
+			job.Spec.NprocPerNode = &DefaultNprocPerNode
+		}
+	}
+}
+
 // SetDefaults_PyTorchJob sets any unspecified values to defaults.
 func SetDefaults_PyTorchJob(job *PyTorchJob) {
 	// Set default cleanpod policy to None.
 	if job.Spec.RunPolicy.CleanPodPolicy == nil {
-		policy := commonv1.CleanPodPolicyNone
-		job.Spec.RunPolicy.CleanPodPolicy = &policy
+		job.Spec.RunPolicy.CleanPodPolicy = CleanPodPolicyPointer(CleanPodPolicyNone)
 	}
 
 	// Update the key of PyTorchReplicaSpecs to camel case.
-	setPytorchTypeNamesToCamelCase(job)
+	setPyTorchTypeNamesToCamelCase(job)
 
 	for _, spec := range job.Spec.PyTorchReplicaSpecs {
 		setDefaultReplicas(spec, 1)
-		setDefaultRestartPolicy(spec, PytorchJobDefaultRestartPolicy)
-		setPytorchDefaultPort(&spec.Template.Spec)
+		setDefaultRestartPolicy(spec, PyTorchJobDefaultRestartPolicy)
+		setPyTorchDefaultPort(&spec.Template.Spec)
 	}
 	// Set default elastic policy.
 	setElasticPolicy(job)
+
+	// Set default nproc_per_node.
+	setDefaultNprocPerNode(job)
 }
