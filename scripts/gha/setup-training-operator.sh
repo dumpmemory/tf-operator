@@ -14,10 +14,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# This shell script is used to build a cluster and create a namespace from our
-# argo workflow
-
-
 set -o errexit
 set -o nounset
 set -o pipefail
@@ -31,30 +27,31 @@ cd manifests/overlays/standalone
 kustomize edit set image kubeflow/training-operator=${TRAINING_CI_IMAGE}
 
 echo "Installing training operator manifests"
-kustomize build . | kubectl apply -f -
+kustomize build . | kubectl apply --server-side -f -
 
 if [ "${GANG_SCHEDULER_NAME}" = "scheduler-plugins" ]; then
-  echo "Installing Scheduler Plugins..."
-  # We need to use latest helm chart since older helm chart has bugs in RBAC.
-  git clone https://github.com/kubernetes-sigs/scheduler-plugins.git
-  pushd scheduler-plugins/manifests/install/charts
+  SCHEDULER_PLUGINS_VERSION=$(go list -m -f "{{.Version}}" sigs.k8s.io/scheduler-plugins)
+  git clone https://github.com/kubernetes-sigs/scheduler-plugins.git -b "${SCHEDULER_PLUGINS_VERSION}"
 
-  # We need to use a values.yaml for v1.23 if K8S cluster version is v1.23.x since latest helm chart does not have compatible with v1.23.
-  # TODO (tenzen-y): Once we stop supporting v1.23, we must remove the below:
-  K8S_MINOR=$(echo "${KUBERNETES_VERSION}" | cut -d . -f 2)
-  if [ "$K8S_MINOR" = "23" ]; then \
-      helm install \
-        -f https://raw.githubusercontent.com/kubernetes-sigs/scheduler-plugins/release-1.23/manifests/install/charts/as-a-second-scheduler/values.yaml \
-        scheduler-plugins as-a-second-scheduler/
-  else
-    helm install scheduler-plugins as-a-second-scheduler/
-  fi
-  popd
-  rm -rf scheduler-plugins
+  echo "Installing Scheduler Plugins ${SCHEDULER_PLUGINS_VERSION}..."
+  helm install scheduler-plugins scheduler-plugins/manifests/install/charts/as-a-second-scheduler/ --create-namespace \
+    --namespace scheduler-plugins \
+    --set controller.image="registry.k8s.io/scheduler-plugins/controller:${SCHEDULER_PLUGINS_VERSION}" \
+    --set scheduler.image="registry.k8s.io/scheduler-plugins/kube-scheduler:${SCHEDULER_PLUGINS_VERSION}"
 
   echo "Configure gang-scheduling using scheduler-plugins to training-operator"
   kubectl patch -n kubeflow deployments training-operator --type='json' \
     -p='[{"op": "add", "path": "/spec/template/spec/containers/0/command/1", "value": "--gang-scheduler-name=scheduler-plugins"}]'
+elif  [ "${GANG_SCHEDULER_NAME}" = "volcano" ]; then
+  VOLCANO_SCHEDULER_VERSION=$(go list -m -f "{{.Version}}" volcano.sh/apis)
+
+  # patch scheduler first so that it is ready when scheduler-deployment installing finished
+  echo "Configure gang-scheduling using volcano to training-operator"
+  kubectl patch -n kubeflow deployments training-operator --type='json' \
+    -p='[{"op": "add", "path": "/spec/template/spec/containers/0/command/1", "value": "--gang-scheduler-name=volcano"}]'
+
+  echo "Installing volcano scheduler ${VOLCANO_SCHEDULER_VERSION}..."
+  kubectl apply -f https://raw.githubusercontent.com/volcano-sh/volcano/${VOLCANO_SCHEDULER_VERSION}/installer/volcano-development.yaml
 fi
 
 TIMEOUT=30
@@ -63,7 +60,16 @@ until kubectl get pods -n kubeflow | grep training-operator | grep 1/1 || [[ $TI
   TIMEOUT=$(( TIMEOUT - 1 ))
 done
 if [ "${GANG_SCHEDULER_NAME}" = "scheduler-plugins" ]; then
-  kubectl wait pods --for=condition=ready -n scheduler-plugins --timeout "${TIMEOUT}s" --all
+  kubectl wait pods --for=condition=ready -n scheduler-plugins --timeout "${TIMEOUT}s" --all || \
+    (kubectl get pods -n scheduler-plugins && kubectl describe pods -n scheduler-plugins; exit 1)
+fi
+
+# wait for volcano up
+if [ "${GANG_SCHEDULER_NAME}" = "volcano" ]; then
+  kubectl rollout status deployment -n volcano-system volcano-admission --timeout "${TIMEOUT}s" && \
+  kubectl rollout status deployment -n volcano-system volcano-scheduler --timeout "${TIMEOUT}s" && \
+  kubectl rollout status deployment -n volcano-system volcano-controllers --timeout "${TIMEOUT}s" || \
+    (kubectl get pods -n volcano-system && kubectl describe pods -n volcano-system; exit 1)
 fi
 
 kubectl version

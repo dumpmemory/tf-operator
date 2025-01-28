@@ -18,24 +18,28 @@ import (
 	"context"
 	"fmt"
 
-	commonv1 "github.com/kubeflow/common/pkg/apis/common/v1"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/uuid"
+	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	kubeflowv1 "github.com/kubeflow/training-operator/pkg/apis/kubeflow.org/v1"
-	"github.com/kubeflow/training-operator/pkg/common/util/v1/testutil"
+	tftestutil "github.com/kubeflow/training-operator/pkg/controller.v1/tensorflow/testutil"
+	commonutil "github.com/kubeflow/training-operator/pkg/util"
+	"github.com/kubeflow/training-operator/pkg/util/testutil"
 )
 
 var _ = Describe("TFJob controller", func() {
 	Context("Test Normal Path", func() {
 		It("should create desired Pods and Services", func() {
 			var (
-				tfJobRunning   = commonv1.JobRunning
-				tfJobSucceeded = commonv1.JobSucceeded
+				tfJobRunning   = kubeflowv1.JobRunning
+				tfJobSucceeded = kubeflowv1.JobSucceeded
 			)
 
 			testCases := map[string]struct {
@@ -72,7 +76,7 @@ var _ = Describe("TFJob controller", func() {
 				expectedSucceededPSPods int32
 				expectedFailedPSPods    int32
 
-				expectedCondition       *commonv1.JobConditionType
+				expectedCondition       *kubeflowv1.JobConditionType
 				expectedConditionReason string
 
 				// There are some cases that should not check start time since the field should be set in the previous sync loop.
@@ -120,7 +124,7 @@ var _ = Describe("TFJob controller", func() {
 					0, 0, 0,
 					4, 0, 0,
 					2, 0, 0,
-					&tfJobRunning, tfJobRunningReason,
+					&tfJobRunning, commonutil.NewReason(kubeflowv1.TFJobKind, commonutil.JobRunningReason),
 					true,
 				},
 				"Distributed TFJob (4 workers, 2 PS) is created, 2 workers, 1 PS are pending": {
@@ -142,7 +146,7 @@ var _ = Describe("TFJob controller", func() {
 					2, 0, 2,
 					1, 0, 0,
 					0, 0, 0,
-					&tfJobRunning, tfJobRunningReason,
+					&tfJobRunning, commonutil.NewReason(kubeflowv1.TFJobKind, commonutil.JobRunningReason),
 					false,
 				},
 				"Distributed TFJob (4 workers, 2 PS) is created, 2 workers, 1 PS are pending, 1 worker is succeeded": {
@@ -164,7 +168,7 @@ var _ = Describe("TFJob controller", func() {
 					0, 0, 0,
 					0, 4, 0,
 					0, 2, 0,
-					&tfJobSucceeded, tfJobSucceededReason,
+					&tfJobSucceeded, commonutil.NewReason(kubeflowv1.TFJobKind, commonutil.JobSucceededReason),
 					false,
 				},
 			}
@@ -177,18 +181,18 @@ var _ = Describe("TFJob controller", func() {
 				jobName := fmt.Sprintf(jobNameTemplate, caseIdx)
 				caseIdx++
 
-				tfJob := testutil.NewTFJob(tc.worker, tc.ps)
+				tfJob := tftestutil.NewTFJob(tc.worker, tc.ps)
 				tfJob.SetName(jobName)
 				tfJob.SetUID(uuid.NewUUID())
 
 				refs := []metav1.OwnerReference{*reconciler.GenOwnerReference(tfJob)}
 				basicLabels := reconciler.GenLabels(tfJob.GetName())
 
-				testutil.SetPodsStatuses(testK8sClient, tfJob, testutil.LabelWorker, tc.pendingWorkerPods, tc.activeWorkerPods, tc.succeededWorkerPods, tc.failedWorkerPods, nil, refs, basicLabels)
-				testutil.SetPodsStatuses(testK8sClient, tfJob, testutil.LabelPS, tc.pendingPSPods, tc.activePSPods, tc.succeededPSPods, tc.failedPSPods, nil, refs, basicLabels)
+				tftestutil.SetPodsStatuses(testK8sClient, tfJob, kubeflowv1.TFJobReplicaTypeWorker, tc.pendingWorkerPods, tc.activeWorkerPods, tc.succeededWorkerPods, tc.failedWorkerPods, nil, refs, basicLabels)
+				tftestutil.SetPodsStatuses(testK8sClient, tfJob, kubeflowv1.TFJobReplicaTypePS, tc.pendingPSPods, tc.activePSPods, tc.succeededPSPods, tc.failedPSPods, nil, refs, basicLabels)
 
-				testutil.SetServices(testK8sClient, tfJob, testutil.LabelWorker, tc.activeWorkerServices, refs, basicLabels)
-				testutil.SetServices(testK8sClient, tfJob, testutil.LabelPS, tc.activePSServices, refs, basicLabels)
+				tftestutil.SetServices(testK8sClient, tfJob, kubeflowv1.TFJobReplicaTypeWorker, tc.activeWorkerServices, refs, basicLabels)
+				tftestutil.SetServices(testK8sClient, tfJob, kubeflowv1.TFJobReplicaTypePS, tc.activePSServices, refs, basicLabels)
 
 				totalPodNumber := int(tc.pendingWorkerPods + tc.activeWorkerPods + tc.succeededWorkerPods + tc.failedWorkerPods + tc.pendingPSPods + tc.activePSPods + tc.succeededPSPods + tc.failedPSPods)
 				totalServiceNumber := int(tc.activeWorkerServices + tc.activePSServices)
@@ -314,9 +318,354 @@ var _ = Describe("TFJob controller", func() {
 
 				// Validate Conditions
 				if tc.expectedCondition != nil {
-					Expect(testutil.CheckCondition(tfJob, *tc.expectedCondition, tc.expectedConditionReason)).Should(BeTrue())
+					Expect(tftestutil.CheckCondition(tfJob, *tc.expectedCondition, tc.expectedConditionReason)).Should(BeTrue())
 				}
 			}
+		})
+	})
+
+	Context("TFJob with suspend semantics", func() {
+		const name = "test-job"
+		var (
+			ns         *corev1.Namespace
+			job        *kubeflowv1.TFJob
+			jobKey     types.NamespacedName
+			chiefKey   types.NamespacedName
+			worker0Key types.NamespacedName
+			ctx        = context.Background()
+		)
+		BeforeEach(func() {
+			ns = &corev1.Namespace{
+				ObjectMeta: metav1.ObjectMeta{
+					GenerateName: "tensorflow-test-",
+				},
+			}
+			Expect(testK8sClient.Create(ctx, ns)).Should(Succeed())
+
+			// chief=1, worker=1
+			job = tftestutil.NewTFJobV2(1, 0, 0, 1, 0)
+			job.SetName(name)
+			job.SetNamespace(ns.Name)
+			jobKey = client.ObjectKeyFromObject(job)
+			chiefKey = types.NamespacedName{
+				Name:      fmt.Sprintf("%s-chief-0", name),
+				Namespace: ns.Name,
+			}
+			worker0Key = types.NamespacedName{
+				Name:      fmt.Sprintf("%s-worker-0", name),
+				Namespace: ns.Name,
+			}
+		})
+		AfterEach(func() {
+			Expect(testK8sClient.Delete(ctx, job)).Should(Succeed())
+			Expect(testK8sClient.Delete(ctx, ns)).Should(Succeed())
+		})
+
+		It("Shouldn't create resources if TFJob is suspended", func() {
+			By("By creating a new TFJob with suspend=true")
+			job.Spec.RunPolicy.Suspend = ptr.To(true)
+			Expect(testK8sClient.Create(ctx, job)).Should(Succeed())
+
+			created := &kubeflowv1.TFJob{}
+			chiefPod := &corev1.Pod{}
+			workerPod := &corev1.Pod{}
+			chiefSvc := &corev1.Service{}
+			workerSvc := &corev1.Service{}
+
+			By("Checking created TFJob")
+			Eventually(func() bool {
+				err := testK8sClient.Get(ctx, jobKey, created)
+				return err == nil
+			}, testutil.Timeout, testutil.Interval).Should(BeTrue())
+			By("Checking created TFJob has a nil startTime")
+			Consistently(func() *metav1.Time {
+				Expect(testK8sClient.Get(ctx, jobKey, created)).Should(Succeed())
+				return created.Status.StartTime
+			}, testutil.ConsistentDuration, testutil.Interval).Should(BeNil())
+
+			By("Checking if the pods and services aren't created")
+			Consistently(func() bool {
+				errChiefPod := testK8sClient.Get(ctx, chiefKey, chiefPod)
+				errWorkerPod := testK8sClient.Get(ctx, worker0Key, workerPod)
+				errChiefSvc := testK8sClient.Get(ctx, chiefKey, chiefSvc)
+				errWorkerSvc := testK8sClient.Get(ctx, worker0Key, workerSvc)
+				return errors.IsNotFound(errChiefPod) && errors.IsNotFound(errWorkerPod) &&
+					errors.IsNotFound(errChiefSvc) && errors.IsNotFound(errWorkerSvc)
+			}, testutil.ConsistentDuration, testutil.Interval).Should(BeTrue())
+
+			By("Checking if the TFJob has suspended condition")
+			Eventually(func() []kubeflowv1.JobCondition {
+				Expect(testK8sClient.Get(ctx, jobKey, created)).Should(Succeed())
+				return created.Status.Conditions
+			}, testutil.ConsistentDuration, testutil.Interval).Should(BeComparableTo([]kubeflowv1.JobCondition{
+				{
+					Type:    kubeflowv1.JobCreated,
+					Status:  corev1.ConditionTrue,
+					Reason:  commonutil.NewReason(kubeflowv1.TFJobKind, commonutil.JobCreatedReason),
+					Message: fmt.Sprintf("TFJob %s is created.", name),
+				},
+				{
+					Type:    kubeflowv1.JobSuspended,
+					Status:  corev1.ConditionTrue,
+					Reason:  commonutil.NewReason(kubeflowv1.TFJobKind, commonutil.JobSuspendedReason),
+					Message: fmt.Sprintf("TFJob %s is suspended.", name),
+				},
+			}, testutil.IgnoreJobConditionsTimes))
+		})
+
+		It("Should delete resources after TFJob is suspended; Should resume TFJob after TFJob is unsuspended", func() {
+			By("By creating a new TFJob")
+			Expect(testK8sClient.Create(ctx, job)).Should(Succeed())
+
+			created := &kubeflowv1.TFJob{}
+			chiefPod := &corev1.Pod{}
+			workerPod := &corev1.Pod{}
+			chiefSvc := &corev1.Service{}
+			workerSvc := &corev1.Service{}
+
+			// We'll need to retry getting this newly created TFJob, given that creation may not immediately happen.
+			By("Checking created TFJob")
+			Eventually(func() bool {
+				err := testK8sClient.Get(ctx, jobKey, created)
+				return err == nil
+			}, testutil.Timeout, testutil.Interval).Should(BeTrue())
+
+			var startTimeBeforeSuspended *metav1.Time
+			Eventually(func() *metav1.Time {
+				Expect(testK8sClient.Get(ctx, jobKey, created)).Should(Succeed())
+				startTimeBeforeSuspended = created.Status.StartTime
+				return startTimeBeforeSuspended
+			}, testutil.Timeout, testutil.Interval).ShouldNot(BeNil())
+
+			By("Checking the created pods and services")
+			Eventually(func() bool {
+				errChief := testK8sClient.Get(ctx, chiefKey, chiefPod)
+				errWorker := testK8sClient.Get(ctx, worker0Key, workerPod)
+				return errChief == nil && errWorker == nil
+			}, testutil.Timeout, testutil.Interval).Should(BeTrue())
+			Eventually(func() bool {
+				errChief := testK8sClient.Get(ctx, chiefKey, chiefSvc)
+				errWorker := testK8sClient.Get(ctx, worker0Key, workerSvc)
+				return errChief == nil && errWorker == nil
+			}, testutil.Timeout, testutil.Interval).Should(BeTrue())
+
+			By("Updating the pod's phase with Running")
+			Eventually(func() error {
+				Expect(testK8sClient.Get(ctx, chiefKey, chiefPod)).Should(Succeed())
+				chiefPod.Status.Phase = corev1.PodRunning
+				return testK8sClient.Status().Update(ctx, chiefPod)
+			}, testutil.Timeout, testutil.Interval).Should(Succeed())
+			Eventually(func() error {
+				Expect(testK8sClient.Get(ctx, worker0Key, workerPod)).Should(Succeed())
+				workerPod.Status.Phase = corev1.PodRunning
+				return testK8sClient.Status().Update(ctx, workerPod)
+			}, testutil.Timeout, testutil.Interval).Should(Succeed())
+
+			By("Checking the TFJob's condition")
+			Eventually(func() []kubeflowv1.JobCondition {
+				Expect(testK8sClient.Get(ctx, jobKey, created)).Should(Succeed())
+				return created.Status.Conditions
+			}, testutil.Timeout, testutil.Interval).Should(BeComparableTo([]kubeflowv1.JobCondition{
+				{
+					Type:    kubeflowv1.JobCreated,
+					Status:  corev1.ConditionTrue,
+					Reason:  commonutil.NewReason(kubeflowv1.TFJobKind, commonutil.JobCreatedReason),
+					Message: fmt.Sprintf("TFJob %s is created.", name),
+				},
+				{
+					Type:    kubeflowv1.JobRunning,
+					Status:  corev1.ConditionTrue,
+					Reason:  commonutil.NewReason(kubeflowv1.TFJobKind, commonutil.JobRunningReason),
+					Message: fmt.Sprintf("TFJob %s/%s is running.", ns.Name, name),
+				},
+			}, testutil.IgnoreJobConditionsTimes))
+
+			By("Updating the TFJob with suspend=true")
+			Eventually(func() error {
+				Expect(testK8sClient.Get(ctx, jobKey, created)).Should(Succeed())
+				created.Spec.RunPolicy.Suspend = ptr.To(true)
+				return testK8sClient.Update(ctx, created)
+			}, testutil.Timeout, testutil.Interval).Should(Succeed())
+
+			By("Checking if the pods and services are removed")
+			Eventually(func() bool {
+				errChief := testK8sClient.Get(ctx, chiefKey, chiefPod)
+				errWorker := testK8sClient.Get(ctx, worker0Key, workerPod)
+				return errors.IsNotFound(errChief) && errors.IsNotFound(errWorker)
+			}, testutil.Timeout, testutil.Interval).Should(BeTrue())
+			Eventually(func() bool {
+				errChief := testK8sClient.Get(ctx, chiefKey, chiefSvc)
+				errWorker := testK8sClient.Get(ctx, worker0Key, workerSvc)
+				return errors.IsNotFound(errChief) && errors.IsNotFound(errWorker)
+			}, testutil.Timeout, testutil.Interval).Should(BeTrue())
+			Consistently(func() bool {
+				errChiefPod := testK8sClient.Get(ctx, chiefKey, chiefPod)
+				errWorkerPod := testK8sClient.Get(ctx, worker0Key, workerPod)
+				errChiefSvc := testK8sClient.Get(ctx, chiefKey, chiefSvc)
+				errWorkerSvc := testK8sClient.Get(ctx, worker0Key, workerSvc)
+				return errors.IsNotFound(errChiefPod) && errors.IsNotFound(errWorkerPod) &&
+					errors.IsNotFound(errChiefSvc) && errors.IsNotFound(errWorkerSvc)
+			}, testutil.ConsistentDuration, testutil.Interval).Should(BeTrue())
+
+			By("Checking if the TFJob has a suspended condition")
+			Eventually(func() bool {
+				Expect(testK8sClient.Get(ctx, jobKey, created)).Should(Succeed())
+				return created.Status.ReplicaStatuses[kubeflowv1.TFJobReplicaTypeChief].Active == 0 &&
+					created.Status.ReplicaStatuses[kubeflowv1.TFJobReplicaTypeWorker].Active == 0 &&
+					created.Status.StartTime.Equal(startTimeBeforeSuspended)
+			}, testutil.Timeout, testutil.Interval).Should(BeTrue())
+			Consistently(func() bool {
+				Expect(testK8sClient.Get(ctx, jobKey, created)).Should(Succeed())
+				return created.Status.ReplicaStatuses[kubeflowv1.TFJobReplicaTypeChief].Active == 0 &&
+					created.Status.ReplicaStatuses[kubeflowv1.TFJobReplicaTypeWorker].Active == 0 &&
+					created.Status.StartTime.Equal(startTimeBeforeSuspended)
+			}, testutil.ConsistentDuration, testutil.Interval).Should(BeTrue())
+			Expect(created.Status.Conditions).Should(BeComparableTo([]kubeflowv1.JobCondition{
+				{
+					Type:    kubeflowv1.JobCreated,
+					Status:  corev1.ConditionTrue,
+					Reason:  commonutil.NewReason(kubeflowv1.TFJobKind, commonutil.JobCreatedReason),
+					Message: fmt.Sprintf("TFJob %s is created.", name),
+				},
+				{
+					Type:    kubeflowv1.JobRunning,
+					Status:  corev1.ConditionFalse,
+					Reason:  commonutil.NewReason(kubeflowv1.TFJobKind, commonutil.JobSuspendedReason),
+					Message: fmt.Sprintf("TFJob %s is suspended.", name),
+				},
+				{
+					Type:    kubeflowv1.JobSuspended,
+					Reason:  commonutil.NewReason(kubeflowv1.TFJobKind, commonutil.JobSuspendedReason),
+					Message: fmt.Sprintf("TFJob %s is suspended.", name),
+					Status:  corev1.ConditionTrue,
+				},
+			}, testutil.IgnoreJobConditionsTimes))
+
+			By("Unsuspending the TFJob")
+			Eventually(func() error {
+				Expect(testK8sClient.Get(ctx, jobKey, created)).Should(Succeed())
+				created.Spec.RunPolicy.Suspend = ptr.To(false)
+				return testK8sClient.Update(ctx, created)
+			}, testutil.Timeout, testutil.Interval).Should(Succeed())
+			Eventually(func() *metav1.Time {
+				Expect(testK8sClient.Get(ctx, jobKey, created)).Should(Succeed())
+				return created.Status.StartTime
+			}, testutil.Timeout, testutil.Interval).ShouldNot(BeNil())
+
+			By("Check if the pods and services are created")
+			Eventually(func() error {
+				return testK8sClient.Get(ctx, chiefKey, chiefPod)
+			}, testutil.Timeout, testutil.Interval).Should(BeNil())
+			Eventually(func() error {
+				return testK8sClient.Get(ctx, worker0Key, workerPod)
+			}, testutil.Timeout, testutil.Interval).Should(BeNil())
+			Eventually(func() error {
+				return testK8sClient.Get(ctx, chiefKey, chiefSvc)
+			}, testutil.Timeout, testutil.Interval).Should(BeNil())
+			Eventually(func() error {
+				return testK8sClient.Get(ctx, worker0Key, workerSvc)
+			}, testutil.Timeout, testutil.Interval).Should(BeNil())
+
+			By("Updating Pod's condition with running")
+			Eventually(func() error {
+				Expect(testK8sClient.Get(ctx, chiefKey, chiefPod)).Should(Succeed())
+				chiefPod.Status.Phase = corev1.PodRunning
+				return testK8sClient.Status().Update(ctx, chiefPod)
+			}, testutil.Timeout, testutil.Interval).Should(Succeed())
+			Eventually(func() error {
+				Expect(testK8sClient.Get(ctx, worker0Key, workerPod)).Should(Succeed())
+				workerPod.Status.Phase = corev1.PodRunning
+				return testK8sClient.Status().Update(ctx, workerPod)
+			}, testutil.Timeout, testutil.Interval).Should(Succeed())
+
+			By("Checking if the TFJob has resumed conditions")
+			Eventually(func() []kubeflowv1.JobCondition {
+				Expect(testK8sClient.Get(ctx, jobKey, created)).Should(Succeed())
+				return created.Status.Conditions
+			}, testutil.Timeout, testutil.Interval).Should(BeComparableTo([]kubeflowv1.JobCondition{
+				{
+					Type:    kubeflowv1.JobCreated,
+					Status:  corev1.ConditionTrue,
+					Reason:  commonutil.NewReason(kubeflowv1.TFJobKind, commonutil.JobCreatedReason),
+					Message: fmt.Sprintf("TFJob %s is created.", name),
+				},
+				{
+					Type:    kubeflowv1.JobSuspended,
+					Reason:  commonutil.NewReason(kubeflowv1.TFJobKind, commonutil.JobResumedReason),
+					Message: fmt.Sprintf("TFJob %s is resumed.", name),
+					Status:  corev1.ConditionFalse,
+				},
+				{
+					Type:    kubeflowv1.JobRunning,
+					Status:  corev1.ConditionTrue,
+					Reason:  commonutil.NewReason(kubeflowv1.TFJobKind, commonutil.JobRunningReason),
+					Message: fmt.Sprintf("TFJob %s/%s is running.", ns.Name, name),
+				},
+			}, testutil.IgnoreJobConditionsTimes))
+
+			By("Checking if the startTime is updated")
+			Expect(created.Status.StartTime).ShouldNot(Equal(startTimeBeforeSuspended))
+		})
+
+		It("Should not reconcile a job while managed by external controller", func() {
+			By("Creating a TFJob managed by external controller")
+			job.Spec.RunPolicy = kubeflowv1.RunPolicy{
+				ManagedBy: ptr.To(kubeflowv1.MultiKueueController),
+			}
+			job.Spec.RunPolicy.Suspend = ptr.To(true)
+			Expect(testK8sClient.Create(ctx, job)).Should(Succeed())
+
+			created := &kubeflowv1.TFJob{}
+			By("Checking created TFJob")
+			Eventually(func() bool {
+				err := testK8sClient.Get(ctx, jobKey, created)
+				return err == nil
+			}, testutil.Timeout, testutil.Interval).Should(BeTrue())
+
+			By("Checking created TFJob has a nil startTime")
+			Consistently(func() *metav1.Time {
+				Expect(testK8sClient.Get(ctx, jobKey, created)).Should(Succeed())
+				return created.Status.StartTime
+			}, testutil.ConsistentDuration, testutil.Interval).Should(BeNil())
+
+			By("Checking if the pods and services aren't created")
+			Consistently(func() bool {
+				chiefPod := &corev1.Pod{}
+				workerPod := &corev1.Pod{}
+				chiefSvc := &corev1.Service{}
+				workerSvc := &corev1.Service{}
+				errMasterPod := testK8sClient.Get(ctx, chiefKey, chiefPod)
+				errWorkerPod := testK8sClient.Get(ctx, worker0Key, workerPod)
+				errMasterSvc := testK8sClient.Get(ctx, chiefKey, chiefSvc)
+				errWorkerSvc := testK8sClient.Get(ctx, worker0Key, workerSvc)
+				return errors.IsNotFound(errMasterPod) && errors.IsNotFound(errWorkerPod) &&
+					errors.IsNotFound(errMasterSvc) && errors.IsNotFound(errWorkerSvc)
+			}, testutil.ConsistentDuration, testutil.Interval).Should(BeTrue(), "pods and services should be created by external controller (here not existent)")
+
+			By("Checking if the TFJob status was not updated")
+			Eventually(func() []kubeflowv1.JobCondition {
+				Expect(testK8sClient.Get(ctx, jobKey, created)).Should(Succeed())
+				return created.Status.Conditions
+			}, testutil.Timeout, testutil.Interval).Should(BeComparableTo([]kubeflowv1.JobCondition(nil)))
+
+			By("Unsuspending the TFJob")
+			Eventually(func() error {
+				Expect(testK8sClient.Get(ctx, jobKey, created)).Should(Succeed())
+				created.Spec.RunPolicy.Suspend = ptr.To(false)
+				return testK8sClient.Update(ctx, created)
+			}, testutil.Timeout, testutil.Interval).Should(Succeed())
+
+			By("Checking created TFJob still has a nil startTime")
+			Consistently(func() *metav1.Time {
+				Expect(testK8sClient.Get(ctx, jobKey, created)).Should(Succeed())
+				return created.Status.StartTime
+			}, testutil.ConsistentDuration, testutil.Interval).Should(BeNil())
+
+			By("Checking if the TFJob status was not updated, even after unsuspending")
+			Eventually(func() []kubeflowv1.JobCondition {
+				Expect(testK8sClient.Get(ctx, jobKey, created)).Should(Succeed())
+				return created.Status.Conditions
+			}, testutil.Timeout, testutil.Interval).Should(BeComparableTo([]kubeflowv1.JobCondition(nil)))
 		})
 	})
 })

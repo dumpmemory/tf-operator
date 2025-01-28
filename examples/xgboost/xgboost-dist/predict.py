@@ -10,12 +10,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from sklearn.metrics import precision_score
-
 import logging
-import numpy as np
 
-from utils import extract_xgbooost_cluster_env, read_predict_data, read_model
+import numpy as np
+from sklearn.metrics import precision_score
+from utils import extract_xgbooost_cluster_env, read_model, read_predict_data
 
 
 def predict(args):
@@ -35,6 +34,6 @@ def predict(args):
     preds = booster.predict(dmatrix)
 
     best_preds = np.asarray([np.argmax(line) for line in preds])
-    score = precision_score(y_test, best_preds, average='macro')
+    score = precision_score(y_test, best_preds, average="macro")
 
     logging.info("Predict accuracy: %f", score)

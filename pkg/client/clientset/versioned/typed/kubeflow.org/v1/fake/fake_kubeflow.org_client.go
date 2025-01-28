@@ -1,4 +1,4 @@
-// Copyright 2021 The Kubeflow Authors
+// Copyright 2024 The Kubeflow Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -26,12 +26,12 @@ type FakeKubeflowV1 struct {
 	*testing.Fake
 }
 
-func (c *FakeKubeflowV1) MPIJobs(namespace string) v1.MPIJobInterface {
-	return &FakeMPIJobs{c, namespace}
+func (c *FakeKubeflowV1) JAXJobs(namespace string) v1.JAXJobInterface {
+	return &FakeJAXJobs{c, namespace}
 }
 
-func (c *FakeKubeflowV1) MXJobs(namespace string) v1.MXJobInterface {
-	return &FakeMXJobs{c, namespace}
+func (c *FakeKubeflowV1) MPIJobs(namespace string) v1.MPIJobInterface {
+	return &FakeMPIJobs{c, namespace}
 }
 
 func (c *FakeKubeflowV1) PaddleJobs(namespace string) v1.PaddleJobInterface {

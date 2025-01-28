@@ -10,8 +10,8 @@ spec:
       template:
         spec:
           containers:
-          - name: xgboostjob
-            image: docker.io/merlintang/xgboost-dist-iris:1.1
+          - name: xgboost
+            image: docker.io/kubeflow/xgboost-dist-iris:latest
             ports:
             - containerPort: 9991
               name: xgboostjob-port
@@ -27,8 +27,8 @@ spec:
       template:
         spec:
           containers:
-          - name: xgboostjob
-            image: docker.io/merlintang/xgboost-dist-iris:1.1
+          - name: xgboost
+            image: docker.io/kubeflow/xgboost-dist-iris:latest
             ports:
             - containerPort: 9991
               name: xgboostjob-port
@@ -38,5 +38,3 @@ spec:
              - --model_path=autoAI/xgb-opt/2
              - --model_storage_type=oss
              - --oss_param=unknown
-
-

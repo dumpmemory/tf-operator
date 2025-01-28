@@ -17,11 +17,10 @@ package pytorch
 import (
 	"testing"
 
-	commonv1 "github.com/kubeflow/common/pkg/apis/common/v1"
 	"github.com/onsi/ginkgo/v2"
 	"github.com/onsi/gomega"
 	corev1 "k8s.io/api/core/v1"
-	"k8s.io/utils/pointer"
+	"k8s.io/utils/ptr"
 
 	kubeflowv1 "github.com/kubeflow/training-operator/pkg/apis/kubeflow.org/v1"
 )
@@ -42,9 +41,9 @@ func TestElasticGenerate(t *testing.T) {
 			name: "Without ElasticPolicy",
 			job: &kubeflowv1.PyTorchJob{
 				Spec: kubeflowv1.PyTorchJobSpec{
-					PyTorchReplicaSpecs: map[commonv1.ReplicaType]*commonv1.ReplicaSpec{
+					PyTorchReplicaSpecs: map[kubeflowv1.ReplicaType]*kubeflowv1.ReplicaSpec{
 						kubeflowv1.PyTorchJobReplicaTypeWorker: {
-							Replicas: pointer.Int32(1),
+							Replicas: ptr.To[int32](1),
 						},
 					},
 				},
@@ -57,12 +56,12 @@ func TestElasticGenerate(t *testing.T) {
 			job: &kubeflowv1.PyTorchJob{
 				Spec: kubeflowv1.PyTorchJobSpec{
 					ElasticPolicy: &kubeflowv1.ElasticPolicy{
-						MinReplicas: pointer.Int32(1),
-						MaxReplicas: pointer.Int32(3),
+						MinReplicas: ptr.To[int32](1),
+						MaxReplicas: ptr.To[int32](3),
 						RDZVBackend: &backendC10D,
-						RDZVPort:    pointer.Int32(1234),
-						RDZVHost:    pointer.String("localhost"),
-						RDZVID:      pointer.String("rdzv-id"),
+						RDZVPort:    ptr.To[int32](1234),
+						RDZVHost:    ptr.To("localhost"),
+						RDZVID:      ptr.To("rdzv-id"),
 						RDZVConf: []kubeflowv1.RDZVConf{
 							{
 								Key:   "rdzv-conf-name",
@@ -73,12 +72,11 @@ func TestElasticGenerate(t *testing.T) {
 								Value: "rdzv-conf-value-1",
 							},
 						},
-						NProcPerNode: pointer.Int32(1),
-						MaxRestarts:  pointer.Int32(3),
+						MaxRestarts: ptr.To[int32](3),
 					},
-					PyTorchReplicaSpecs: map[commonv1.ReplicaType]*commonv1.ReplicaSpec{
+					PyTorchReplicaSpecs: map[kubeflowv1.ReplicaType]*kubeflowv1.ReplicaSpec{
 						kubeflowv1.PyTorchJobReplicaTypeWorker: {
-							Replicas: pointer.Int32(1),
+							Replicas: ptr.To[int32](1),
 						},
 					},
 				},
@@ -88,10 +86,6 @@ func TestElasticGenerate(t *testing.T) {
 				{
 					Name:  EnvMaxRestarts,
 					Value: "3",
-				},
-				{
-					Name:  EnvNProcPerNode,
-					Value: "1",
 				},
 				{
 					Name:  EnvRDZVBackend,
@@ -110,7 +104,7 @@ func TestElasticGenerate(t *testing.T) {
 					Value: "rdzv-conf-name=rdzv-conf-value,rdzv-conf-name-1=rdzv-conf-value-1",
 				},
 				{
-					Name:  EnvNNodes,
+					Name:  EnvNnodes,
 					Value: "1:3",
 				},
 			},

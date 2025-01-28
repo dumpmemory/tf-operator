@@ -10,8 +10,8 @@ spec:
       template:
         spec:
           containers:
-          - name: xgboostjob
-            image: docker.io/merlintang/xgboost-dist-rabit-test:1.2
+          - name: xgboost
+            image: docker.io/kubeflow/xgboost-dist-rabit-test:latest
             ports:
             - containerPort: 9991
               name: xgboostjob-port
@@ -22,10 +22,9 @@ spec:
       template:
         spec:
           containers:
-          - name: xgboostjob
-            image: docker.io/merlintang/xgboost-dist-rabit-test:1.2
+          - name: xgboost
+            image: docker.io/kubeflow/xgboost-dist-rabit-test:latest
             ports:
             - containerPort: 9991
               name: xgboostjob-port
             imagePullPolicy: Always
-

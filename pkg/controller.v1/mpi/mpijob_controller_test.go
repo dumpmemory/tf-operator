@@ -18,19 +18,22 @@ import (
 	"context"
 	"fmt"
 	"strings"
-	"time"
 
-	common "github.com/kubeflow/common/pkg/apis/common/v1"
+	common "github.com/kubeflow/training-operator/pkg/apis/kubeflow.org/v1"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/utils/pointer"
+	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	kubeflowv1 "github.com/kubeflow/training-operator/pkg/apis/kubeflow.org/v1"
+	commonutil "github.com/kubeflow/training-operator/pkg/util"
+	"github.com/kubeflow/training-operator/pkg/util/testutil"
 )
 
 const (
@@ -39,7 +42,6 @@ const (
 )
 
 func newMPIJobCommon(name string, startTime, completionTime *metav1.Time) *kubeflowv1.MPIJob {
-	cleanPodPolicyAll := common.CleanPodPolicyAll
 	mpiJob := &kubeflowv1.MPIJob{
 		TypeMeta: metav1.TypeMeta{APIVersion: kubeflowv1.SchemeGroupVersion.String()},
 		ObjectMeta: metav1.ObjectMeta{
@@ -48,7 +50,7 @@ func newMPIJobCommon(name string, startTime, completionTime *metav1.Time) *kubef
 		},
 		Spec: kubeflowv1.MPIJobSpec{
 			RunPolicy: common.RunPolicy{
-				CleanPodPolicy: &cleanPodPolicyAll,
+				CleanPodPolicy: kubeflowv1.CleanPodPolicyPointer(kubeflowv1.CleanPodPolicyAll),
 			},
 			MPIReplicaSpecs: map[common.ReplicaType]*common.ReplicaSpec{
 				kubeflowv1.MPIJobReplicaTypeWorker: {
@@ -113,7 +115,7 @@ var newMPIJob = newMPIJobWithLauncher
 func newMPIJobWithLauncher(name string, replicas *int32, pusPerReplica int64, resourceName string, startTime, completionTime *metav1.Time) *kubeflowv1.MPIJob {
 	mpiJob := newMPIJobOld(name, replicas, pusPerReplica, resourceName, startTime, completionTime)
 
-	mpiJob.Spec.MPIReplicaSpecs[kubeflowv1.MPIJobReplicaTypeLauncher].Replicas = pointer.Int32(1)
+	mpiJob.Spec.MPIReplicaSpecs[kubeflowv1.MPIJobReplicaTypeLauncher].Replicas = ptr.To[int32](1)
 
 	launcherContainers := mpiJob.Spec.MPIReplicaSpecs[kubeflowv1.MPIJobReplicaTypeLauncher].Template.Spec.Containers
 	for i := range launcherContainers {
@@ -129,12 +131,6 @@ func newMPIJobWithLauncher(name string, replicas *int32, pusPerReplica int64, re
 }
 
 var _ = Describe("MPIJob controller", func() {
-	// Define utility constants for object names and testing timeouts/durations and intervals.
-	const (
-		timeout  = 10 * time.Second
-		interval = 1000 * time.Millisecond
-	)
-
 	Context("Test launcher is GPU launcher", func() {
 		It("Should pass GPU Launcher verification", func() {
 			By("By creating MPIJobs with various resource configuration")
@@ -162,7 +158,7 @@ var _ = Describe("MPIJob controller", func() {
 
 			for testName, testCase := range testCases {
 				mpiJob := newMPIJobWithLauncher("test-"+strings.ToLower(testName),
-					pointer.Int32(64), 1, testCase.gpu, &startTime, &completionTime)
+					ptr.To[int32](64), 1, testCase.gpu, &startTime, &completionTime)
 				Expect(isGPULauncher(mpiJob) == testCase.expected).To(BeTrue())
 			}
 		})
@@ -177,7 +173,7 @@ var _ = Describe("MPIJob controller", func() {
 
 			jobName := "test-launcher-succeeded"
 
-			mpiJob := newMPIJobWithLauncher(jobName, pointer.Int32(64), 1, gpuResourceName, &startTime, &completionTime)
+			mpiJob := newMPIJobWithLauncher(jobName, ptr.To[int32](64), 1, gpuResourceName, &startTime, &completionTime)
 			Expect(testK8sClient.Create(ctx, mpiJob)).Should(Succeed())
 
 			launcher := reconciler.newLauncher(mpiJob, "kubectl-delivery", isGPULauncher(mpiJob))
@@ -194,7 +190,7 @@ var _ = Describe("MPIJob controller", func() {
 				}
 				launcherCreated.Status.Phase = corev1.PodSucceeded
 				return testK8sClient.Status().Update(ctx, launcherCreated)
-			}, timeout, interval).Should(BeNil())
+			}, testutil.Timeout, testutil.Interval).Should(BeNil())
 
 			created := &kubeflowv1.MPIJob{}
 			launcherStatus := &common.ReplicaStatus{
@@ -208,7 +204,7 @@ var _ = Describe("MPIJob controller", func() {
 					return false
 				}
 				return ReplicaStatusMatch(created.Status.ReplicaStatuses, kubeflowv1.MPIJobReplicaTypeLauncher, launcherStatus)
-			}, timeout, interval).Should(BeTrue())
+			}, testutil.Timeout, testutil.Interval).Should(BeTrue())
 		})
 	})
 
@@ -221,7 +217,7 @@ var _ = Describe("MPIJob controller", func() {
 
 			jobName := "test-launcher-failed"
 
-			mpiJob := newMPIJobWithLauncher(jobName, pointer.Int32(64), 1, gpuResourceName, &startTime, &completionTime)
+			mpiJob := newMPIJobWithLauncher(jobName, ptr.To[int32](64), 1, gpuResourceName, &startTime, &completionTime)
 			Expect(testK8sClient.Create(ctx, mpiJob)).Should(Succeed())
 
 			launcher := reconciler.newLauncher(mpiJob, "kubectl-delivery", isGPULauncher(mpiJob))
@@ -236,7 +232,7 @@ var _ = Describe("MPIJob controller", func() {
 				}
 				launcherCreated.Status.Phase = corev1.PodFailed
 				return testK8sClient.Status().Update(ctx, launcherCreated)
-			}, timeout, interval).Should(BeNil())
+			}, testutil.Timeout, testutil.Interval).Should(BeNil())
 
 			launcherStatus := &common.ReplicaStatus{
 				Active:    0,
@@ -250,7 +246,7 @@ var _ = Describe("MPIJob controller", func() {
 					return false
 				}
 				return ReplicaStatusMatch(created.Status.ReplicaStatuses, kubeflowv1.MPIJobReplicaTypeLauncher, launcherStatus)
-			}, timeout, interval).Should(BeTrue())
+			}, testutil.Timeout, testutil.Interval).Should(BeTrue())
 		})
 	})
 
@@ -263,7 +259,7 @@ var _ = Describe("MPIJob controller", func() {
 
 			jobName := "test-launcher-succeeded2"
 
-			mpiJob := newMPIJobWithLauncher(jobName, pointer.Int32(64), 1, gpuResourceName, &startTime, &completionTime)
+			mpiJob := newMPIJobWithLauncher(jobName, ptr.To[int32](64), 1, gpuResourceName, &startTime, &completionTime)
 			Expect(testK8sClient.Create(ctx, mpiJob)).Should(Succeed())
 
 			launcher := reconciler.newLauncher(mpiJob, "kubectl-delivery", isGPULauncher(mpiJob))
@@ -280,7 +276,7 @@ var _ = Describe("MPIJob controller", func() {
 				}
 				launcherCreated.Status.Phase = corev1.PodSucceeded
 				return testK8sClient.Status().Update(ctx, launcherCreated)
-			}, timeout, interval).Should(BeNil())
+			}, testutil.Timeout, testutil.Interval).Should(BeNil())
 
 			created := &kubeflowv1.MPIJob{}
 			launcherStatus := &common.ReplicaStatus{
@@ -294,7 +290,7 @@ var _ = Describe("MPIJob controller", func() {
 					return false
 				}
 				return ReplicaStatusMatch(created.Status.ReplicaStatuses, kubeflowv1.MPIJobReplicaTypeWorker, launcherStatus)
-			}, timeout, interval).Should(BeTrue())
+			}, testutil.Timeout, testutil.Interval).Should(BeTrue())
 		})
 	})
 
@@ -324,7 +320,7 @@ var _ = Describe("MPIJob controller", func() {
 				}
 				launcherCreated.Status.Phase = corev1.PodRunning
 				return testK8sClient.Status().Update(ctx, launcherCreated)
-			}, timeout, interval).Should(BeNil())
+			}, testutil.Timeout, testutil.Interval).Should(BeNil())
 
 			for i := 0; i < int(replicas); i++ {
 				name := fmt.Sprintf("%s-%d", mpiJob.Name+workerSuffix, i)
@@ -340,7 +336,7 @@ var _ = Describe("MPIJob controller", func() {
 					}
 					workerCreated.Status.Phase = corev1.PodPending
 					return testK8sClient.Status().Update(ctx, workerCreated)
-				}, timeout, interval).Should(BeNil())
+				}, testutil.Timeout, testutil.Interval).Should(BeNil())
 			}
 
 			key := types.NamespacedName{
@@ -366,7 +362,7 @@ var _ = Describe("MPIJob controller", func() {
 				return ReplicaStatusMatch(created.Status.ReplicaStatuses, kubeflowv1.MPIJobReplicaTypeLauncher,
 					launcherStatus) && ReplicaStatusMatch(created.Status.ReplicaStatuses, kubeflowv1.MPIJobReplicaTypeWorker,
 					workerStatus)
-			}, timeout, interval).Should(BeTrue())
+			}, testutil.Timeout, testutil.Interval).Should(BeTrue())
 		})
 	})
 
@@ -396,7 +392,7 @@ var _ = Describe("MPIJob controller", func() {
 				}
 				launcherCreated.Status.Phase = corev1.PodRunning
 				return testK8sClient.Status().Update(ctx, launcherCreated)
-			}, timeout, interval).Should(BeNil())
+			}, testutil.Timeout, testutil.Interval).Should(BeNil())
 
 			for i := 0; i < int(replicas); i++ {
 				name := fmt.Sprintf("%s-%d", mpiJob.Name+workerSuffix, i)
@@ -412,7 +408,7 @@ var _ = Describe("MPIJob controller", func() {
 					}
 					workerCreated.Status.Phase = corev1.PodRunning
 					return testK8sClient.Status().Update(ctx, workerCreated)
-				}, timeout, interval).Should(BeNil())
+				}, testutil.Timeout, testutil.Interval).Should(BeNil())
 			}
 
 			key := types.NamespacedName{
@@ -438,7 +434,7 @@ var _ = Describe("MPIJob controller", func() {
 				return ReplicaStatusMatch(created.Status.ReplicaStatuses, kubeflowv1.MPIJobReplicaTypeLauncher,
 					launcherStatus) && ReplicaStatusMatch(created.Status.ReplicaStatuses, kubeflowv1.MPIJobReplicaTypeWorker,
 					workerStatus)
-			}, timeout, interval).Should(BeTrue())
+			}, testutil.Timeout, testutil.Interval).Should(BeTrue())
 		})
 	})
 
@@ -470,7 +466,7 @@ var _ = Describe("MPIJob controller", func() {
 					}
 					workerCreated.Status.Phase = corev1.PodRunning
 					return testK8sClient.Status().Update(ctx, workerCreated)
-				}, timeout, interval).Should(BeNil())
+				}, testutil.Timeout, testutil.Interval).Should(BeNil())
 			}
 
 			launcherKey := types.NamespacedName{
@@ -481,7 +477,7 @@ var _ = Describe("MPIJob controller", func() {
 			Eventually(func() bool {
 				err := testK8sClient.Get(ctx, launcherKey, launcher)
 				return err != nil
-			}, timeout, interval).Should(BeTrue())
+			}, testutil.Timeout, testutil.Interval).Should(BeTrue())
 
 			key := types.NamespacedName{
 				Namespace: metav1.NamespaceDefault,
@@ -506,7 +502,7 @@ var _ = Describe("MPIJob controller", func() {
 				return ReplicaStatusMatch(created.Status.ReplicaStatuses, kubeflowv1.MPIJobReplicaTypeLauncher,
 					launcherStatus) && ReplicaStatusMatch(created.Status.ReplicaStatuses, kubeflowv1.MPIJobReplicaTypeWorker,
 					workerStatus)
-			}, timeout, interval).Should(BeTrue())
+			}, testutil.Timeout, testutil.Interval).Should(BeTrue())
 		})
 	})
 
@@ -526,6 +522,57 @@ var _ = Describe("MPIJob controller", func() {
 		})
 	})
 
+	Context("MPI Job succeeds with predefined service account", func() {
+		It("should run with the defined service account", func() {
+			By("Calling Reconcile method")
+			jobName := "test-sa-orphan"
+			launcherSaName := "launcher-sa"
+
+			ctx := context.Background()
+			startTime := metav1.Now()
+			completionTime := metav1.Now()
+
+			mpiJob := newMPIJob(jobName, ptr.To[int32](64), 1, gpuResourceName, &startTime, &completionTime)
+			mpiJob.Spec.MPIReplicaSpecs[kubeflowv1.MPIJobReplicaTypeLauncher].Template.Spec.ServiceAccountName = launcherSaName
+			sa := newLauncherServiceAccount(mpiJob)
+			sa.OwnerReferences = nil
+
+			Expect(sa.Name).Should(Equal(launcherSaName))
+			Expect(testK8sClient.Create(ctx, sa)).Should(Succeed())
+			Expect(testK8sClient.Create(ctx, mpiJob)).Should(Succeed())
+
+			Eventually(func() error {
+				req := ctrl.Request{NamespacedName: types.NamespacedName{
+					Namespace: metav1.NamespaceDefault,
+					Name:      mpiJob.GetName(),
+				}}
+
+				_, err := reconciler.Reconcile(ctx, req)
+
+				if err != nil {
+					return err
+				}
+
+				return nil
+			}, testutil.Timeout, testutil.Interval).Should(BeNil())
+
+			Eventually(func() string {
+				launcherCreated := &corev1.Pod{}
+
+				launcherKey := types.NamespacedName{
+					Namespace: metav1.NamespaceDefault,
+					Name:      mpiJob.Name + launcherSuffix,
+				}
+
+				if err := testK8sClient.Get(ctx, launcherKey, launcherCreated); err != nil {
+					return ""
+				}
+
+				return launcherCreated.Spec.ServiceAccountName
+			}, testutil.Timeout, testutil.Interval).Should(Equal(launcherSaName))
+		})
+	})
+
 	Context("MPIJob with launcher Pod not controlled by itself", func() {
 		It("Should return error", func() {
 			By("Calling Reconcile method")
@@ -536,7 +583,7 @@ var _ = Describe("MPIJob controller", func() {
 			startTime := metav1.Now()
 			completionTime := metav1.Now()
 
-			mpiJob := newMPIJob(jobName, pointer.Int32(64), 1, gpuResourceName, &startTime, &completionTime)
+			mpiJob := newMPIJob(jobName, ptr.To[int32](64), 1, gpuResourceName, &startTime, &completionTime)
 
 			launcher := reconciler.newLauncher(mpiJob, "kubectl-delivery", isGPULauncher(mpiJob))
 			launcher.OwnerReferences = nil
@@ -552,7 +599,7 @@ var _ = Describe("MPIJob controller", func() {
 			Eventually(func() error {
 				_, err := reconciler.Reconcile(ctx, req)
 				return err
-			}, timeout, interval).Should(MatchError(expectedErr))
+			}, testutil.Timeout, testutil.Interval).Should(MatchError(expectedErr))
 		})
 	})
 
@@ -566,7 +613,7 @@ var _ = Describe("MPIJob controller", func() {
 			startTime := metav1.Now()
 			completionTime := metav1.Now()
 
-			mpiJob := newMPIJob(jobName, pointer.Int32(1), 1, gpuResourceName, &startTime, &completionTime)
+			mpiJob := newMPIJob(jobName, ptr.To[int32](1), 1, gpuResourceName, &startTime, &completionTime)
 
 			for i := 0; i < 1; i++ {
 				name := fmt.Sprintf("%s-%d", mpiJob.Name+workerSuffix, i)
@@ -585,7 +632,7 @@ var _ = Describe("MPIJob controller", func() {
 			Eventually(func() error {
 				_, err := reconciler.Reconcile(ctx, req)
 				return err
-			}, timeout, interval).Should(MatchError(expectedErr))
+			}, testutil.Timeout, testutil.Interval).Should(MatchError(expectedErr))
 		})
 	})
 
@@ -599,7 +646,7 @@ var _ = Describe("MPIJob controller", func() {
 			startTime := metav1.Now()
 			completionTime := metav1.Now()
 
-			mpiJob := newMPIJob(jobName, pointer.Int32(64), 1, gpuResourceName, &startTime, &completionTime)
+			mpiJob := newMPIJob(jobName, ptr.To[int32](64), 1, gpuResourceName, &startTime, &completionTime)
 
 			cm := newConfigMap(mpiJob, 64, isGPULauncher(mpiJob))
 			cm.OwnerReferences = nil
@@ -615,37 +662,7 @@ var _ = Describe("MPIJob controller", func() {
 			Eventually(func() error {
 				_, err := reconciler.Reconcile(ctx, req)
 				return err
-			}, timeout, interval).Should(MatchError(expectedErr))
-		})
-	})
-
-	Context("MPIJob with ServiceAccount not controlled by itself", func() {
-		It("Should return error", func() {
-			By("Calling Reconcile method")
-			jobName := "test-sa-orphan"
-			testKind := "ServiceAccount"
-
-			ctx := context.Background()
-			startTime := metav1.Now()
-			completionTime := metav1.Now()
-
-			mpiJob := newMPIJob(jobName, pointer.Int32(64), 1, gpuResourceName, &startTime, &completionTime)
-
-			sa := newLauncherServiceAccount(mpiJob)
-			sa.OwnerReferences = nil
-			Expect(testK8sClient.Create(ctx, sa)).Should(Succeed())
-
-			Expect(testK8sClient.Create(ctx, mpiJob)).Should(Succeed())
-
-			req := ctrl.Request{NamespacedName: types.NamespacedName{
-				Namespace: metav1.NamespaceDefault,
-				Name:      mpiJob.GetName(),
-			}}
-			expectedErr := fmt.Errorf(MessageResourceExists, sa.Name, testKind)
-			Eventually(func() error {
-				_, err := reconciler.Reconcile(ctx, req)
-				return err
-			}, timeout, interval).Should(MatchError(expectedErr))
+			}, testutil.Timeout, testutil.Interval).Should(MatchError(expectedErr))
 		})
 	})
 
@@ -659,7 +676,7 @@ var _ = Describe("MPIJob controller", func() {
 			startTime := metav1.Now()
 			completionTime := metav1.Now()
 
-			mpiJob := newMPIJob(jobName, pointer.Int32(64), 1, gpuResourceName, &startTime, &completionTime)
+			mpiJob := newMPIJob(jobName, ptr.To[int32](64), 1, gpuResourceName, &startTime, &completionTime)
 
 			role := newLauncherRole(mpiJob, 64)
 			role.OwnerReferences = nil
@@ -675,7 +692,7 @@ var _ = Describe("MPIJob controller", func() {
 			Eventually(func() error {
 				_, err := reconciler.Reconcile(ctx, req)
 				return err
-			}, timeout, interval).Should(MatchError(expectedErr))
+			}, testutil.Timeout, testutil.Interval).Should(MatchError(expectedErr))
 		})
 	})
 
@@ -689,7 +706,7 @@ var _ = Describe("MPIJob controller", func() {
 			startTime := metav1.Now()
 			completionTime := metav1.Now()
 
-			mpiJob := newMPIJob(jobName, pointer.Int32(64), 1, gpuResourceName, &startTime, &completionTime)
+			mpiJob := newMPIJob(jobName, ptr.To[int32](64), 1, gpuResourceName, &startTime, &completionTime)
 
 			rb := newLauncherRoleBinding(mpiJob)
 			rb.OwnerReferences = nil
@@ -705,10 +722,412 @@ var _ = Describe("MPIJob controller", func() {
 			Eventually(func() error {
 				_, err := reconciler.Reconcile(ctx, req)
 				return err
-			}, timeout, interval).Should(MatchError(expectedErr))
+			}, testutil.Timeout, testutil.Interval).Should(MatchError(expectedErr))
 		})
 	})
 
+	Context("Test launcher's Intel MPI handling", func() {
+		It("Should create a launcher job with Intel MPI env variables", func() {
+			By("By creating MPIJobs with and without preset env variables")
+
+			testCases := map[string]struct {
+				envVariables         map[string]string
+				expectedEnvVariables map[string]string
+			}{
+				"withoutIMPIValues": {
+					envVariables: map[string]string{
+						"X_MPI_HYDRA_BOOTSTRAP": "foo",
+					},
+					expectedEnvVariables: map[string]string{
+						"I_MPI_HYDRA_BOOTSTRAP":      iMPIDefaultBootstrap,
+						"I_MPI_HYDRA_BOOTSTRAP_EXEC": fmt.Sprintf("%s/%s", configMountPath, kubexecScriptName),
+					},
+				},
+				"withIMPIBootstrap": {
+					envVariables: map[string]string{
+						"I_MPI_HYDRA_BOOTSTRAP": "RSH",
+					},
+					expectedEnvVariables: map[string]string{
+						"I_MPI_HYDRA_BOOTSTRAP":      "RSH",
+						"I_MPI_HYDRA_BOOTSTRAP_EXEC": fmt.Sprintf("%s/%s", configMountPath, kubexecScriptName),
+					},
+				},
+				"withIMPIBootstrapExec": {
+					envVariables: map[string]string{
+						"I_MPI_HYDRA_BOOTSTRAP_EXEC": "/script.sh",
+					},
+					expectedEnvVariables: map[string]string{
+						"I_MPI_HYDRA_BOOTSTRAP":      iMPIDefaultBootstrap,
+						"I_MPI_HYDRA_BOOTSTRAP_EXEC": "/script.sh",
+					},
+				},
+				"withIMPIBootstrapAndExec": {
+					envVariables: map[string]string{
+						"I_MPI_HYDRA_BOOTSTRAP":      "RSH",
+						"I_MPI_HYDRA_BOOTSTRAP_EXEC": "/script.sh",
+					},
+					expectedEnvVariables: map[string]string{
+						"I_MPI_HYDRA_BOOTSTRAP":      "RSH",
+						"I_MPI_HYDRA_BOOTSTRAP_EXEC": "/script.sh",
+					},
+				},
+			}
+
+			for testName, testCase := range testCases {
+				ctx := context.Background()
+				startTime := metav1.Now()
+				completionTime := metav1.Now()
+
+				jobName := "test-launcher-creation-" + strings.ToLower(testName)
+
+				mpiJob := newMPIJob(jobName, ptr.To[int32](1), 1, gpuResourceName, &startTime, &completionTime)
+				Expect(testK8sClient.Create(ctx, mpiJob)).Should(Succeed())
+
+				template := &mpiJob.Spec.MPIReplicaSpecs[kubeflowv1.MPIJobReplicaTypeLauncher].Template
+				Expect(len(template.Spec.Containers) == 1).To(BeTrue())
+
+				cont := &template.Spec.Containers[0]
+
+				for k, v := range testCase.envVariables {
+					cont.Env = append(cont.Env,
+						corev1.EnvVar{
+							Name:  k,
+							Value: v,
+						},
+					)
+				}
+
+				launcher := reconciler.newLauncher(mpiJob, "kubectl-delivery", false)
+
+				Expect(len(launcher.Spec.Containers) == 1).To(BeTrue())
+				for expectedKey, expectedValue := range testCase.expectedEnvVariables {
+					Expect(launcher.Spec.Containers[0].Env).Should(ContainElements(
+						corev1.EnvVar{
+							Name:  expectedKey,
+							Value: expectedValue,
+						}),
+					)
+				}
+			}
+		})
+	})
+
+	Context("When creating the MPIJob with the suspend semantics", func() {
+		const name = "test-job"
+		var (
+			ns          *corev1.Namespace
+			job         *kubeflowv1.MPIJob
+			jobKey      types.NamespacedName
+			launcherKey types.NamespacedName
+			worker0Key  types.NamespacedName
+			ctx         = context.Background()
+		)
+		BeforeEach(func() {
+			ns = &corev1.Namespace{
+				ObjectMeta: metav1.ObjectMeta{
+					GenerateName: "mpijob-test-",
+				},
+			}
+			Expect(testK8sClient.Create(ctx, ns)).Should(Succeed())
+
+			now := metav1.Now()
+			job = newMPIJob(name, ptr.To[int32](1), 1, gpuResourceName, &now, &now)
+			job.Namespace = ns.Name
+			jobKey = client.ObjectKeyFromObject(job)
+			launcherKey = types.NamespacedName{
+				Name:      fmt.Sprintf("%s-launcher", name),
+				Namespace: ns.Name,
+			}
+			worker0Key = types.NamespacedName{
+				Name:      fmt.Sprintf("%s-worker-0", name),
+				Namespace: ns.Name,
+			}
+		})
+		AfterEach(func() {
+			Expect(testK8sClient.Delete(ctx, job)).Should(Succeed())
+			Expect(testK8sClient.Delete(ctx, ns)).Should(Succeed())
+		})
+		It("Shouldn't create resources if MPIJob is suspended", func() {
+			By("By creating a new MPIJob with suspend=true")
+			job.Spec.RunPolicy.Suspend = ptr.To(true)
+			Expect(testK8sClient.Create(ctx, job)).Should(Succeed())
+
+			created := &kubeflowv1.MPIJob{}
+			launcherPod := &corev1.Pod{}
+			workerPod := &corev1.Pod{}
+
+			By("Checking created MPIJob")
+			Eventually(func() bool {
+				err := testK8sClient.Get(ctx, jobKey, created)
+				return err == nil
+			}, testutil.Timeout, testutil.Interval).Should(BeTrue())
+			By("Checking created MPIJob has a nil startTime")
+			Consistently(func() *metav1.Time {
+				Expect(testK8sClient.Get(ctx, jobKey, created)).Should(Succeed())
+				return created.Status.StartTime
+			}, testutil.ConsistentDuration, testutil.Interval).Should(BeNil())
+
+			By("Checking if the pods aren't created")
+			Consistently(func() bool {
+				errLauncherPod := testK8sClient.Get(ctx, launcherKey, launcherPod)
+				errWorkerPod := testK8sClient.Get(ctx, worker0Key, workerPod)
+				return errors.IsNotFound(errLauncherPod) && errors.IsNotFound(errWorkerPod)
+			}, testutil.ConsistentDuration, testutil.Interval).Should(BeTrue())
+
+			By("Checking if the MPIJob has suspended condition")
+			Eventually(func() []kubeflowv1.JobCondition {
+				Expect(testK8sClient.Get(ctx, jobKey, created)).Should(Succeed())
+				return created.Status.Conditions
+			}, testutil.ConsistentDuration, testutil.Interval).Should(BeComparableTo([]kubeflowv1.JobCondition{
+				{
+					Type:    kubeflowv1.JobCreated,
+					Status:  corev1.ConditionTrue,
+					Reason:  commonutil.NewReason(kubeflowv1.MPIJobKind, commonutil.JobCreatedReason),
+					Message: fmt.Sprintf("MPIJob %s is created.", name),
+				},
+				{
+					Type:    kubeflowv1.JobSuspended,
+					Status:  corev1.ConditionTrue,
+					Reason:  commonutil.NewReason(kubeflowv1.MPIJobKind, commonutil.JobSuspendedReason),
+					Message: fmt.Sprintf("MPIJob %s is suspended.", name),
+				},
+			}, testutil.IgnoreJobConditionsTimes))
+		})
+
+		It("Should delete resources after MPIJob is suspended; Should resume MPIJob after MPIJob is unsuspended", func() {
+			By("By creating a new MPIJob")
+			Expect(testK8sClient.Create(ctx, job)).Should(Succeed())
+
+			created := &kubeflowv1.MPIJob{}
+			launcherPod := &corev1.Pod{}
+			workerPod := &corev1.Pod{}
+
+			// We'll need to retry getting this newly created MPIJob, given that creation may not immediately happen.
+			By("Checking created MPIJob")
+			Eventually(func() bool {
+				err := testK8sClient.Get(ctx, jobKey, created)
+				return err == nil
+			}, testutil.Timeout, testutil.Interval).Should(BeTrue())
+
+			var startTimeBeforeSuspended *metav1.Time
+			Eventually(func() *metav1.Time {
+				Expect(testK8sClient.Get(ctx, jobKey, created)).Should(Succeed())
+				startTimeBeforeSuspended = created.Status.StartTime
+				return startTimeBeforeSuspended
+			}, testutil.Timeout, testutil.Interval).ShouldNot(BeNil())
+
+			By("Checking the created pods")
+			Eventually(func() bool {
+				errLauncher := testK8sClient.Get(ctx, launcherKey, launcherPod)
+				errWorker := testK8sClient.Get(ctx, worker0Key, workerPod)
+				return errLauncher == nil && errWorker == nil
+			}, testutil.Timeout, testutil.Interval).Should(BeTrue())
+
+			By("Updating the Pod's phase with Running")
+			Eventually(func() error {
+				Expect(testK8sClient.Get(ctx, launcherKey, launcherPod)).Should(Succeed())
+				launcherPod.Status.Phase = corev1.PodRunning
+				return testK8sClient.Status().Update(ctx, launcherPod)
+			}, testutil.Timeout, testutil.Interval).Should(Succeed())
+			Eventually(func() error {
+				Expect(testK8sClient.Get(ctx, worker0Key, workerPod)).Should(Succeed())
+				workerPod.Status.Phase = corev1.PodRunning
+				return testK8sClient.Status().Update(ctx, workerPod)
+			}, testutil.Timeout, testutil.Interval).Should(Succeed())
+
+			By("Checking the MPIJob's condition")
+			Eventually(func() []kubeflowv1.JobCondition {
+				Expect(testK8sClient.Get(ctx, jobKey, created)).Should(Succeed())
+				return created.Status.Conditions
+			}, testutil.Timeout, testutil.Interval).Should(BeComparableTo([]kubeflowv1.JobCondition{
+				{
+					Type:    kubeflowv1.JobCreated,
+					Status:  corev1.ConditionTrue,
+					Reason:  commonutil.NewReason(kubeflowv1.MPIJobKind, commonutil.JobCreatedReason),
+					Message: fmt.Sprintf("MPIJob %s is created.", name),
+				},
+				{
+					Type:    kubeflowv1.JobRunning,
+					Status:  corev1.ConditionTrue,
+					Reason:  commonutil.NewReason(kubeflowv1.MPIJobKind, commonutil.JobRunningReason),
+					Message: fmt.Sprintf("MPIJob %s is running.", name),
+				},
+			}, testutil.IgnoreJobConditionsTimes))
+
+			By("Updating the MPIJob with suspend=true")
+			Eventually(func() error {
+				Expect(testK8sClient.Get(ctx, jobKey, created)).Should(Succeed())
+				created.Spec.RunPolicy.Suspend = ptr.To(true)
+				return testK8sClient.Update(ctx, created)
+			}, testutil.Timeout, testutil.Interval).Should(Succeed())
+
+			By("Checking if the pods are removed")
+			Eventually(func() bool {
+				errLauncher := testK8sClient.Get(ctx, launcherKey, launcherPod)
+				errWorker := testK8sClient.Get(ctx, worker0Key, workerPod)
+				return errors.IsNotFound(errLauncher) && errors.IsNotFound(errWorker)
+			}, testutil.Timeout, testutil.Interval).Should(BeTrue())
+			Consistently(func() bool {
+				errLauncherPod := testK8sClient.Get(ctx, launcherKey, launcherPod)
+				errWorkerPod := testK8sClient.Get(ctx, worker0Key, workerPod)
+				return errors.IsNotFound(errLauncherPod) && errors.IsNotFound(errWorkerPod)
+			}, testutil.ConsistentDuration, testutil.Interval).Should(BeTrue())
+
+			By("Checking if the MPIJob has a suspended condition")
+			Eventually(func() bool {
+				Expect(testK8sClient.Get(ctx, jobKey, created)).Should(Succeed())
+				return created.Status.ReplicaStatuses[kubeflowv1.MPIJobReplicaTypeLauncher].Active == 0 &&
+					created.Status.ReplicaStatuses[kubeflowv1.MPIJobReplicaTypeWorker].Active == 0 &&
+					created.Status.StartTime.Equal(startTimeBeforeSuspended)
+			}, testutil.Timeout, testutil.Interval).Should(BeTrue())
+			Consistently(func() bool {
+				Expect(testK8sClient.Get(ctx, jobKey, created)).Should(Succeed())
+				return created.Status.ReplicaStatuses[kubeflowv1.MPIJobReplicaTypeLauncher].Active == 0 &&
+					created.Status.ReplicaStatuses[kubeflowv1.MPIJobReplicaTypeWorker].Active == 0 &&
+					created.Status.StartTime.Equal(startTimeBeforeSuspended)
+			}, testutil.ConsistentDuration, testutil.Interval).Should(BeTrue())
+			Expect(created.Status.Conditions).Should(BeComparableTo([]kubeflowv1.JobCondition{
+				{
+					Type:    kubeflowv1.JobCreated,
+					Status:  corev1.ConditionTrue,
+					Reason:  commonutil.NewReason(kubeflowv1.MPIJobKind, commonutil.JobCreatedReason),
+					Message: fmt.Sprintf("MPIJob %s is created.", name),
+				},
+				{
+					Type:    kubeflowv1.JobRunning,
+					Status:  corev1.ConditionFalse,
+					Reason:  commonutil.NewReason(kubeflowv1.MPIJobKind, commonutil.JobSuspendedReason),
+					Message: fmt.Sprintf("MPIJob %s is suspended.", name),
+				},
+				{
+					Type:    kubeflowv1.JobSuspended,
+					Reason:  commonutil.NewReason(kubeflowv1.MPIJobKind, commonutil.JobSuspendedReason),
+					Message: fmt.Sprintf("MPIJob %s is suspended.", name),
+					Status:  corev1.ConditionTrue,
+				},
+			}, testutil.IgnoreJobConditionsTimes))
+
+			By("Unsuspending the MPIJob")
+			Eventually(func() error {
+				Expect(testK8sClient.Get(ctx, jobKey, created)).Should(Succeed())
+				created.Spec.RunPolicy.Suspend = ptr.To(false)
+				return testK8sClient.Update(ctx, created)
+			}, testutil.Timeout, testutil.Interval).Should(Succeed())
+			Eventually(func() *metav1.Time {
+				Expect(testK8sClient.Get(ctx, jobKey, created)).Should(Succeed())
+				return created.Status.StartTime
+			}, testutil.Timeout, testutil.Interval).ShouldNot(BeNil())
+
+			By("Check if the pods are created")
+			Eventually(func() error {
+				return testK8sClient.Get(ctx, launcherKey, launcherPod)
+			}, testutil.Timeout, testutil.Interval).Should(BeNil())
+			Eventually(func() error {
+				return testK8sClient.Get(ctx, worker0Key, workerPod)
+			}, testutil.Timeout, testutil.Interval).Should(BeNil())
+
+			By("Updating Pod's condition with Running")
+			Eventually(func() error {
+				Expect(testK8sClient.Get(ctx, launcherKey, launcherPod)).Should(Succeed())
+				launcherPod.Status.Phase = corev1.PodRunning
+				return testK8sClient.Status().Update(ctx, launcherPod)
+			}, testutil.Timeout, testutil.Interval).Should(Succeed())
+			Eventually(func() error {
+				Expect(testK8sClient.Get(ctx, worker0Key, workerPod)).Should(Succeed())
+				workerPod.Status.Phase = corev1.PodRunning
+				return testK8sClient.Status().Update(ctx, workerPod)
+			}, testutil.Timeout, testutil.Interval).Should(Succeed())
+
+			By("Checking if the MPIJob has resumed conditions")
+			Eventually(func() []kubeflowv1.JobCondition {
+				Expect(testK8sClient.Get(ctx, jobKey, created)).Should(Succeed())
+				return created.Status.Conditions
+			}, testutil.Timeout, testutil.Interval).Should(BeComparableTo([]kubeflowv1.JobCondition{
+				{
+					Type:    kubeflowv1.JobCreated,
+					Status:  corev1.ConditionTrue,
+					Reason:  commonutil.NewReason(kubeflowv1.MPIJobKind, commonutil.JobCreatedReason),
+					Message: fmt.Sprintf("MPIJob %s is created.", name),
+				},
+				{
+					Type:    kubeflowv1.JobSuspended,
+					Reason:  commonutil.NewReason(kubeflowv1.MPIJobKind, commonutil.JobResumedReason),
+					Message: fmt.Sprintf("MPIJob %s is resumed.", name),
+					Status:  corev1.ConditionFalse,
+				},
+				{
+					Type:    kubeflowv1.JobRunning,
+					Status:  corev1.ConditionTrue,
+					Reason:  commonutil.NewReason(kubeflowv1.MPIJobKind, commonutil.JobRunningReason),
+					Message: fmt.Sprintf("MPIJob %s is running.", name),
+				},
+			}, testutil.IgnoreJobConditionsTimes))
+
+			By("Checking if the startTime is updated")
+			Expect(created.Status.StartTime).ShouldNot(Equal(startTimeBeforeSuspended))
+		})
+
+		It("Should not reconcile a job while managed by external controller", func() {
+			By("Creating a MPIJob managed by external controller")
+			job.Spec.RunPolicy = kubeflowv1.RunPolicy{
+				ManagedBy: ptr.To(kubeflowv1.MultiKueueController),
+			}
+			job.Spec.RunPolicy.Suspend = ptr.To(true)
+			Expect(testK8sClient.Create(ctx, job)).Should(Succeed())
+
+			created := &kubeflowv1.MPIJob{}
+			By("Checking created MPIJob")
+			Eventually(func() bool {
+				err := testK8sClient.Get(ctx, jobKey, created)
+				return err == nil
+			}, testutil.Timeout, testutil.Interval).Should(BeTrue())
+
+			By("Checking created MPIJob has a nil startTime")
+			Consistently(func() *metav1.Time {
+				Expect(testK8sClient.Get(ctx, jobKey, created)).Should(Succeed())
+				return created.Status.StartTime
+			}, testutil.ConsistentDuration, testutil.Interval).Should(BeNil())
+
+			By("Checking if the pods and services aren't created")
+			Consistently(func() bool {
+				launcherPod := &corev1.Pod{}
+				workerPod := &corev1.Pod{}
+				launcherSvc := &corev1.Service{}
+				workerSvc := &corev1.Service{}
+				errMasterPod := testK8sClient.Get(ctx, launcherKey, launcherPod)
+				errWorkerPod := testK8sClient.Get(ctx, worker0Key, workerPod)
+				errMasterSvc := testK8sClient.Get(ctx, launcherKey, launcherSvc)
+				errWorkerSvc := testK8sClient.Get(ctx, worker0Key, workerSvc)
+				return errors.IsNotFound(errMasterPod) && errors.IsNotFound(errWorkerPod) &&
+					errors.IsNotFound(errMasterSvc) && errors.IsNotFound(errWorkerSvc)
+			}, testutil.ConsistentDuration, testutil.Interval).Should(BeTrue(), "pods and services should be created by external controller (here not existent)")
+
+			By("Checking if the MPIJob status was not updated")
+			Eventually(func() []kubeflowv1.JobCondition {
+				Expect(testK8sClient.Get(ctx, jobKey, created)).Should(Succeed())
+				return created.Status.Conditions
+			}, testutil.Timeout, testutil.Interval).Should(BeComparableTo([]kubeflowv1.JobCondition(nil)))
+
+			By("Unsuspending the MPIJob")
+			Eventually(func() error {
+				Expect(testK8sClient.Get(ctx, jobKey, created)).Should(Succeed())
+				created.Spec.RunPolicy.Suspend = ptr.To(false)
+				return testK8sClient.Update(ctx, created)
+			}, testutil.Timeout, testutil.Interval).Should(Succeed())
+
+			By("Checking created MPIJob still has a nil startTime")
+			Consistently(func() *metav1.Time {
+				Expect(testK8sClient.Get(ctx, jobKey, created)).Should(Succeed())
+				return created.Status.StartTime
+			}, testutil.ConsistentDuration, testutil.Interval).Should(BeNil())
+
+			By("Checking if the MPIJob status was not updated, even after unsuspending")
+			Eventually(func() []kubeflowv1.JobCondition {
+				Expect(testK8sClient.Get(ctx, jobKey, created)).Should(Succeed())
+				return created.Status.Conditions
+			}, testutil.Timeout, testutil.Interval).Should(BeComparableTo([]kubeflowv1.JobCondition(nil)))
+		})
+	})
 })
 
 func ReplicaStatusMatch(replicaStatuses map[common.ReplicaType]*common.ReplicaStatus,

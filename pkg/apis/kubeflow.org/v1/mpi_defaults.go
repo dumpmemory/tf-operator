@@ -16,8 +16,6 @@ package v1
 
 import (
 	"k8s.io/apimachinery/pkg/runtime"
-
-	commonv1 "github.com/kubeflow/common/pkg/apis/common/v1"
 )
 
 func addMPIJobDefaultingFuncs(scheme *runtime.Scheme) error {
@@ -27,14 +25,15 @@ func addMPIJobDefaultingFuncs(scheme *runtime.Scheme) error {
 func SetDefaults_MPIJob(mpiJob *MPIJob) {
 	// Set default CleanPodPolicy to None when neither fields specified.
 	if mpiJob.Spec.CleanPodPolicy == nil && mpiJob.Spec.RunPolicy.CleanPodPolicy == nil {
-		none := commonv1.CleanPodPolicyNone
-		mpiJob.Spec.CleanPodPolicy = &none
-		mpiJob.Spec.RunPolicy.CleanPodPolicy = &none
+		mpiJob.Spec.CleanPodPolicy = CleanPodPolicyPointer(CleanPodPolicyNone)
+		mpiJob.Spec.RunPolicy.CleanPodPolicy = CleanPodPolicyPointer(CleanPodPolicyNone)
 	}
 
-	// set default to Launcher
-	setDefaultRestartPolicy(mpiJob.Spec.MPIReplicaSpecs[MPIJobReplicaTypeLauncher], MPIJobDefaultRestartPolicy)
+	// Set default replicas
+	setDefaultReplicas(mpiJob.Spec.MPIReplicaSpecs[MPIJobReplicaTypeLauncher], 1)
+	setDefaultReplicas(mpiJob.Spec.MPIReplicaSpecs[MPIJobReplicaTypeWorker], 0)
 
-	// set default to Worker
+	// Set default restartPolicy
+	setDefaultRestartPolicy(mpiJob.Spec.MPIReplicaSpecs[MPIJobReplicaTypeLauncher], MPIJobDefaultRestartPolicy)
 	setDefaultRestartPolicy(mpiJob.Spec.MPIReplicaSpecs[MPIJobReplicaTypeWorker], MPIJobDefaultRestartPolicy)
 }

@@ -1,4 +1,4 @@
-// Copyright 2021 The Kubeflow Authors
+// Copyright 2024 The Kubeflow Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -26,8 +26,8 @@ import (
 
 type KubeflowV1Interface interface {
 	RESTClient() rest.Interface
+	JAXJobsGetter
 	MPIJobsGetter
-	MXJobsGetter
 	PaddleJobsGetter
 	PyTorchJobsGetter
 	TFJobsGetter
@@ -39,12 +39,12 @@ type KubeflowV1Client struct {
 	restClient rest.Interface
 }
 
-func (c *KubeflowV1Client) MPIJobs(namespace string) MPIJobInterface {
-	return newMPIJobs(c, namespace)
+func (c *KubeflowV1Client) JAXJobs(namespace string) JAXJobInterface {
+	return newJAXJobs(c, namespace)
 }
 
-func (c *KubeflowV1Client) MXJobs(namespace string) MXJobInterface {
-	return newMXJobs(c, namespace)
+func (c *KubeflowV1Client) MPIJobs(namespace string) MPIJobInterface {
+	return newMPIJobs(c, namespace)
 }
 
 func (c *KubeflowV1Client) PaddleJobs(namespace string) PaddleJobInterface {

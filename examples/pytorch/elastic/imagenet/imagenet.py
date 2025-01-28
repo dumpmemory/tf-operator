@@ -63,12 +63,11 @@ import torch.utils.data.distributed
 import torchvision.datasets as datasets
 import torchvision.models as models
 import torchvision.transforms as transforms
-from torch.distributed.elastic.utils.data import ElasticDistributedSampler
 from torch.distributed.elastic.multiprocessing.errors import record
+from torch.distributed.elastic.utils.data import ElasticDistributedSampler
 from torch.nn.parallel import DistributedDataParallel
 from torch.optim import SGD
 from torch.utils.data import DataLoader
-
 
 model_names = sorted(
     name
@@ -146,6 +145,7 @@ parser.add_argument(
     help="checkpoint file path, to load and save to",
 )
 
+
 @record
 def main():
     args = parser.parse_args()
@@ -164,9 +164,7 @@ def main():
     )
 
     # resume from checkpoint if one exists;
-    state = load_checkpoint(
-        args.checkpoint_file, args.arch, model, optimizer
-    )
+    state = load_checkpoint(args.checkpoint_file, args.arch, model, optimizer)
 
     start_epoch = state.epoch + 1
     print(f"=> start_epoch: {start_epoch}, best_acc1: {state.best_acc1}")
@@ -350,7 +348,7 @@ def load_checkpoint(
 
         # max_epoch == -1 means no one has checkpointed return base state
         if max_epoch == -1:
-            print(f"=> no workers have checkpoints, starting from epoch 0")
+            print("=> no workers have checkpoints, starting from epoch 0")
             return state
 
         # broadcast the state from max_rank (which has the most up-to-date state)
@@ -372,7 +370,7 @@ def load_checkpoint(
             blob = torch.as_tensor(raw_blob, dtype=torch.uint8)
 
         dist.broadcast(blob, src=max_rank, group=pg)
-        print(f"=> done broadcasting checkpoint")
+        print("=> done broadcasting checkpoint")
 
         if rank != max_rank:
             with io.BytesIO(blob.numpy()) as f:
@@ -382,7 +380,7 @@ def load_checkpoint(
         # wait till everyone has loaded the checkpoint
         dist.barrier(group=pg)
 
-    print(f"=> done restoring from previous checkpoint")
+    print("=> done restoring from previous checkpoint")
     return state
 
 

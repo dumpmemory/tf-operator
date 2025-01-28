@@ -17,32 +17,29 @@ package tensorflow
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"time"
 
-	commonv1 "github.com/kubeflow/common/pkg/apis/common/v1"
-	"github.com/kubeflow/common/pkg/controller.v1/common"
-	commonutil "github.com/kubeflow/common/pkg/util"
+	"github.com/google/go-cmp/cmp/cmpopts"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/apimachinery/pkg/util/uuid"
-	"k8s.io/utils/pointer"
+	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	kubeflowv1 "github.com/kubeflow/training-operator/pkg/apis/kubeflow.org/v1"
-	"github.com/kubeflow/training-operator/pkg/common/util/v1/testutil"
+	"github.com/kubeflow/training-operator/pkg/controller.v1/common"
+	tftestutil "github.com/kubeflow/training-operator/pkg/controller.v1/tensorflow/testutil"
+	commonutil "github.com/kubeflow/training-operator/pkg/util"
+	"github.com/kubeflow/training-operator/pkg/util/testutil"
 )
 
 var _ = Describe("TFJob controller", func() {
-	// Define utility constants for object names and testing timeouts/durations and intervals.
-	const (
-		timeout  = 10 * time.Second
-		interval = 1000 * time.Millisecond
-	)
-
 	Context("Test Add TFJob", func() {
 		It("should get the exact TFJob", func() {
 			By("submitting an TFJob")
@@ -54,11 +51,11 @@ var _ = Describe("TFJob controller", func() {
 
 			ctx := context.Background()
 
-			tfJob := testutil.NewTFJob(1, 0)
+			tfJob := tftestutil.NewTFJob(1, 0)
 			tfJob.SetName(testJobName)
 			tfJob.SetNamespace(testNamespace)
 
-			decoyJob := testutil.NewTFJob(2, 3)
+			decoyJob := tftestutil.NewTFJob(2, 3)
 			decoyJob.SetName(decoyJobName)
 			decoyJob.SetNamespace(testNamespace)
 
@@ -72,7 +69,7 @@ var _ = Describe("TFJob controller", func() {
 			Eventually(func() error {
 				job := &kubeflowv1.TFJob{}
 				return reconciler.Get(ctx, key, job)
-			}, timeout, interval).Should(BeNil())
+			}, testutil.Timeout, testutil.Interval).Should(BeNil())
 
 			Expect(testK8sClient.Delete(ctx, tfJob)).Should(Succeed())
 			Expect(testK8sClient.Delete(ctx, decoyJob)).Should(Succeed())
@@ -88,7 +85,7 @@ var _ = Describe("TFJob controller", func() {
 			testLabelVal := "1"
 
 			testJobName := "test-copy-labels-anno"
-			tfjob := testutil.NewTFJob(1, 0)
+			tfjob := tftestutil.NewTFJob(1, 0)
 			tfjob.SetName(testJobName)
 			annotations := map[string]string{
 				testAnnotationKey: testAnnotationVal,
@@ -136,7 +133,7 @@ var _ = Describe("TFJob controller", func() {
 				}
 
 				return nil
-			}, timeout, interval).Should(BeNil())
+			}, testutil.Timeout, testutil.Interval).Should(BeNil())
 		})
 	})
 
@@ -165,7 +162,7 @@ var _ = Describe("TFJob controller", func() {
 			testCases := []testCase{
 				{
 					description: "4 workers and 2 ps is running, policy is all",
-					tfJob:       testutil.NewTFJobWithCleanPolicy(0, 4, 2, commonv1.CleanPodPolicyAll),
+					tfJob:       tftestutil.NewTFJobWithCleanPolicy(0, 4, 2, kubeflowv1.CleanPodPolicyAll),
 
 					pendingWorkerPods:   0,
 					activeWorkerPods:    4,
@@ -184,7 +181,7 @@ var _ = Describe("TFJob controller", func() {
 				},
 				{
 					description: "4 workers and 2 ps is running, policy is running",
-					tfJob:       testutil.NewTFJobWithCleanPolicy(0, 4, 2, commonv1.CleanPodPolicyRunning),
+					tfJob:       tftestutil.NewTFJobWithCleanPolicy(0, 4, 2, kubeflowv1.CleanPodPolicyRunning),
 
 					pendingWorkerPods:   0,
 					activeWorkerPods:    4,
@@ -203,7 +200,7 @@ var _ = Describe("TFJob controller", func() {
 				},
 				{
 					description: "4 workers and 2 ps is succeeded, policy is running",
-					tfJob:       testutil.NewTFJobWithCleanPolicy(0, 4, 2, commonv1.CleanPodPolicyRunning),
+					tfJob:       tftestutil.NewTFJobWithCleanPolicy(0, 4, 2, kubeflowv1.CleanPodPolicyRunning),
 
 					pendingWorkerPods:   0,
 					activeWorkerPods:    0,
@@ -222,7 +219,7 @@ var _ = Describe("TFJob controller", func() {
 				},
 				{
 					description: "4 workers and 2 ps is succeeded, policy is None",
-					tfJob:       testutil.NewTFJobWithCleanPolicy(0, 4, 2, commonv1.CleanPodPolicyNone),
+					tfJob:       tftestutil.NewTFJobWithCleanPolicy(0, 4, 2, kubeflowv1.CleanPodPolicyNone),
 
 					pendingWorkerPods:   0,
 					activeWorkerPods:    0,
@@ -247,7 +244,7 @@ var _ = Describe("TFJob controller", func() {
 				ctx := context.Background()
 				tc.tfJob.SetName(fmt.Sprintf(jobNameTemplate, idx))
 				tc.tfJob.SetUID(uuid.NewUUID())
-				Expect(commonutil.UpdateJobConditions(&tc.tfJob.Status, commonv1.JobSucceeded, tfJobSucceededReason, "")).Should(Succeed())
+				commonutil.UpdateJobConditions(&tc.tfJob.Status, kubeflowv1.JobSucceeded, corev1.ConditionTrue, commonutil.NewReason(kubeflowv1.TFJobKind, commonutil.JobSucceededReason), "")
 
 				refs := []metav1.OwnerReference{
 					*reconciler.GenOwnerReference(tc.tfJob),
@@ -263,15 +260,15 @@ var _ = Describe("TFJob controller", func() {
 				}
 
 				By("creating Services and Pods with designed phases")
-				testutil.SetPodsStatuses(testK8sClient, tc.tfJob, testutil.LabelWorker,
+				tftestutil.SetPodsStatuses(testK8sClient, tc.tfJob, kubeflowv1.TFJobReplicaTypeWorker,
 					tc.pendingWorkerPods, tc.activeWorkerPods, tc.succeededWorkerPods, tc.failedWorkerPods,
 					nil, refs, basicLabels)
-				testutil.SetPodsStatuses(testK8sClient, tc.tfJob, testutil.LabelPS,
+				tftestutil.SetPodsStatuses(testK8sClient, tc.tfJob, kubeflowv1.TFJobReplicaTypePS,
 					tc.pendingPSPods, tc.activePSPods, tc.succeededPSPods, tc.failedPSPods,
 					nil, refs, basicLabels)
 
-				testutil.SetServices(testK8sClient, tc.tfJob, testutil.LabelWorker, tc.activeWorkerServices, refs, basicLabels)
-				testutil.SetServices(testK8sClient, tc.tfJob, testutil.LabelPS, tc.activePSServices, refs, basicLabels)
+				tftestutil.SetServices(testK8sClient, tc.tfJob, kubeflowv1.TFJobReplicaTypeWorker, tc.activeWorkerServices, refs, basicLabels)
+				tftestutil.SetServices(testK8sClient, tc.tfJob, kubeflowv1.TFJobReplicaTypePS, tc.activePSServices, refs, basicLabels)
 
 				podList := &corev1.PodList{}
 				Expect(testK8sClient.List(ctx, podList, listOpt)).Should(Succeed())
@@ -322,7 +319,7 @@ var _ = Describe("TFJob controller", func() {
 			testCases := []testCase{
 				{
 					description: "4 workers and 2 ps is running, ActiveDeadlineSeconds unset",
-					tfJob:       testutil.NewTFJobWithActiveDeadlineSeconds(0, 4, 2, nil),
+					tfJob:       tftestutil.NewTFJobWithActiveDeadlineSeconds(0, 4, 2, nil),
 
 					pendingWorkerPods:   0,
 					activeWorkerPods:    4,
@@ -341,7 +338,7 @@ var _ = Describe("TFJob controller", func() {
 				},
 				{
 					description: "4 workers and 2 ps is running, ActiveDeadlineSeconds is 2",
-					tfJob:       testutil.NewTFJobWithActiveDeadlineSeconds(0, 4, 2, adsTest2),
+					tfJob:       tftestutil.NewTFJobWithActiveDeadlineSeconds(0, 4, 2, adsTest2),
 
 					pendingWorkerPods:   0,
 					activeWorkerPods:    4,
@@ -380,15 +377,15 @@ var _ = Describe("TFJob controller", func() {
 				}
 
 				By("creating Services and Pods with designed phases")
-				testutil.SetPodsStatuses(testK8sClient, tc.tfJob, testutil.LabelWorker,
+				tftestutil.SetPodsStatuses(testK8sClient, tc.tfJob, kubeflowv1.TFJobReplicaTypeWorker,
 					tc.pendingWorkerPods, tc.activeWorkerPods, tc.succeededWorkerPods, tc.failedWorkerPods,
 					nil, refs, basicLabels)
-				testutil.SetPodsStatuses(testK8sClient, tc.tfJob, testutil.LabelPS,
+				tftestutil.SetPodsStatuses(testK8sClient, tc.tfJob, kubeflowv1.TFJobReplicaTypePS,
 					tc.pendingPSPods, tc.activePSPods, tc.succeededPSPods, tc.failedPSPods,
 					nil, refs, basicLabels)
 
-				testutil.SetServices(testK8sClient, tc.tfJob, testutil.LabelWorker, tc.activeWorkerServices, refs, basicLabels)
-				testutil.SetServices(testK8sClient, tc.tfJob, testutil.LabelPS, tc.activePSServices, refs, basicLabels)
+				tftestutil.SetServices(testK8sClient, tc.tfJob, kubeflowv1.TFJobReplicaTypeWorker, tc.activeWorkerServices, refs, basicLabels)
+				tftestutil.SetServices(testK8sClient, tc.tfJob, kubeflowv1.TFJobReplicaTypePS, tc.activePSServices, refs, basicLabels)
 
 				podList := &corev1.PodList{}
 				Expect(testK8sClient.List(ctx, podList, listOpt)).Should(Succeed())
@@ -450,7 +447,7 @@ var _ = Describe("TFJob controller", func() {
 			testCases := []testCase{
 				{
 					description: "4 workers each having 1 restartCount and 2 ps is running, backoffLimit 4 ",
-					tfJob:       testutil.NewTFJobWithBackoffLimit(0, 4, 2, backoffLimitTest4),
+					tfJob:       tftestutil.NewTFJobWithBackoffLimit(0, 4, 2, backoffLimitTest4),
 
 					pendingWorkerPods:   0,
 					activeWorkerPods:    4,
@@ -492,15 +489,15 @@ var _ = Describe("TFJob controller", func() {
 				}
 
 				By("creating Services and Pods with designed phases")
-				testutil.SetPodsStatuses(testK8sClient, tc.tfJob, testutil.LabelWorker,
+				tftestutil.SetPodsStatuses(testK8sClient, tc.tfJob, kubeflowv1.TFJobReplicaTypeWorker,
 					tc.pendingWorkerPods, tc.activeWorkerPods, tc.succeededWorkerPods, tc.failedWorkerPods,
 					tc.restartCounts, refs, basicLabels)
-				testutil.SetPodsStatuses(testK8sClient, tc.tfJob, testutil.LabelPS,
+				tftestutil.SetPodsStatuses(testK8sClient, tc.tfJob, kubeflowv1.TFJobReplicaTypePS,
 					tc.pendingPSPods, tc.activePSPods, tc.succeededPSPods, tc.failedPSPods,
 					tc.restartCounts, refs, basicLabels)
 
-				testutil.SetServices(testK8sClient, tc.tfJob, testutil.LabelWorker, tc.activeWorkerServices, refs, basicLabels)
-				testutil.SetServices(testK8sClient, tc.tfJob, testutil.LabelPS, tc.activePSServices, refs, basicLabels)
+				tftestutil.SetServices(testK8sClient, tc.tfJob, kubeflowv1.TFJobReplicaTypeWorker, tc.activeWorkerServices, refs, basicLabels)
+				tftestutil.SetServices(testK8sClient, tc.tfJob, kubeflowv1.TFJobReplicaTypePS, tc.activePSServices, refs, basicLabels)
 
 				podList := &corev1.PodList{}
 				Expect(testK8sClient.List(ctx, podList, listOpt)).Should(Succeed())
@@ -534,12 +531,12 @@ var _ = Describe("TFJob controller", func() {
 			testCases := []testCase{
 				{
 					description: "succeeded job with TTL 3s",
-					tfJob:       testutil.NewTFJobWithCleanupJobDelay(0, 1, 0, pointer.Int32(3)),
+					tfJob:       tftestutil.NewTFJobWithCleanupJobDelay(0, 1, 0, ptr.To[int32](3)),
 					phase:       corev1.PodSucceeded,
 				},
 				{
 					description: "failed job with TTL 3s",
-					tfJob:       testutil.NewTFJobWithCleanupJobDelay(0, 1, 0, pointer.Int32(3)),
+					tfJob:       tftestutil.NewTFJobWithCleanupJobDelay(0, 1, 0, ptr.To[int32](3)),
 					phase:       corev1.PodFailed,
 				},
 			}
@@ -549,27 +546,43 @@ var _ = Describe("TFJob controller", func() {
 				ctx := context.Background()
 				name := fmt.Sprintf(jobNameTemplate, idx)
 				tc.tfJob.SetName(name)
+				tc.tfJob.CreationTimestamp = metav1.Now()
 
 				By("creating a TFJob")
 				Expect(reconciler.Create(ctx, tc.tfJob)).Should(Succeed())
 
-				initializeReplicaStatuses(&tc.tfJob.Status, kubeflowv1.TFJobReplicaTypeWorker)
+				// We need to wait for synchronizing cache.
+				By("getting a created TFJob")
+				var updatedTFJob kubeflowv1.TFJob
+				Eventually(func() error {
+					return reconciler.Get(ctx, client.ObjectKeyFromObject(tc.tfJob), &updatedTFJob)
+				}, testutil.Timeout, testutil.Interval).Should(BeNil())
+
+				initializeReplicaStatuses(&updatedTFJob.Status, kubeflowv1.TFJobReplicaTypeWorker)
 
 				By("prepare pod")
 				refs := []metav1.OwnerReference{
 					*reconciler.GenOwnerReference(tc.tfJob),
 				}
-				pod := testutil.NewBasePod("pod", tc.tfJob, refs)
+				pod := tftestutil.NewBasePod("pod", tc.tfJob, refs)
 				pod.Status.Phase = tc.phase
 
 				By("update job replica statuses")
-				updateJobReplicaStatuses(&tc.tfJob.Status, kubeflowv1.TFJobReplicaTypeWorker, pod)
+				updateJobReplicaStatuses(&updatedTFJob.Status, kubeflowv1.TFJobReplicaTypeWorker, pod)
 
 				By("update job status")
-				Expect(reconciler.UpdateJobStatus(tc.tfJob, tc.tfJob.Spec.TFReplicaSpecs, &tc.tfJob.Status)).To(Succeed())
-				Expect(reconciler.Status().Update(ctx, tc.tfJob)).Should(Succeed())
+				Expect(reconciler.UpdateJobStatus(&updatedTFJob, updatedTFJob.Spec.TFReplicaSpecs, &updatedTFJob.Status)).To(Succeed())
+				By("updating job status...")
+				Expect(reconciler.Status().Update(ctx, &updatedTFJob)).To(Succeed())
 
-				ttl := tc.tfJob.Spec.RunPolicy.TTLSecondsAfterFinished
+				By("waiting for updating replicaStatus for workers")
+				Eventually(func() *kubeflowv1.ReplicaStatus {
+					var getTFJob kubeflowv1.TFJob
+					Expect(reconciler.Get(ctx, client.ObjectKeyFromObject(tc.tfJob), &getTFJob)).Should(Succeed())
+					return getTFJob.Status.ReplicaStatuses[kubeflowv1.TFJobReplicaTypeWorker]
+				}, testutil.Timeout, testutil.Interval).ShouldNot(BeNil())
+
+				ttl := updatedTFJob.Spec.RunPolicy.TTLSecondsAfterFinished
 				if ttl != nil {
 					dur := time.Second * time.Duration(*ttl)
 					time.Sleep(dur)
@@ -588,9 +601,226 @@ var _ = Describe("TFJob controller", func() {
 						return err
 					}
 					return fmt.Errorf("job %s still remains", name)
-				}, timeout, interval).Should(BeNil())
+				}, testutil.Timeout, testutil.Interval).Should(BeNil())
 			}
 		})
 	})
+})
 
+var _ = Describe("Test for controller.v1/common", func() {
+	var (
+		ctx = context.Background()
+		ns  *corev1.Namespace
+		now metav1.Time
+	)
+	BeforeEach(func() {
+		ns = &corev1.Namespace{
+			ObjectMeta: metav1.ObjectMeta{
+				GenerateName: "tfjob-ns-",
+			},
+		}
+		now = metav1.Now()
+		Expect(testK8sClient.Create(ctx, ns)).Should(Succeed())
+	})
+	AfterEach(func() {
+		Expect(testK8sClient.Delete(ctx, ns)).Should(Succeed())
+	})
+
+	type cleanUpCases struct {
+		tfJob              *kubeflowv1.TFJob
+		runPolicy          *kubeflowv1.RunPolicy
+		jobStatus          kubeflowv1.JobStatus
+		wantTFJobIsRemoved bool
+		wantErr            bool
+	}
+	DescribeTable("TFJob is created and is cleaned up",
+		func(tc *cleanUpCases) {
+			tc.tfJob.SetNamespace(ns.Name)
+			Expect(testK8sClient.Create(ctx, tc.tfJob)).Should(Succeed())
+
+			if tc.wantErr {
+				Expect(reconciler.CleanupJob(tc.runPolicy, tc.jobStatus, tc.tfJob)).ShouldNot(Succeed())
+			} else {
+				Expect(reconciler.CleanupJob(tc.runPolicy, tc.jobStatus, tc.tfJob)).Should(Succeed())
+			}
+			if tc.wantTFJobIsRemoved {
+				Eventually(func() bool {
+					gotErr := testK8sClient.Get(ctx, client.ObjectKeyFromObject(tc.tfJob), &kubeflowv1.TFJob{})
+					return errors.IsNotFound(gotErr)
+				}, testutil.Timeout, testutil.Interval).Should(BeTrue())
+			} else {
+				Eventually(func() error {
+					return testK8sClient.Get(ctx, client.ObjectKeyFromObject(tc.tfJob), &kubeflowv1.TFJob{})
+				}, testutil.Timeout, testutil.Interval).Should(BeNil())
+			}
+		},
+		Entry("TFJob shouldn't be removed since TTL is nil", &cleanUpCases{
+			tfJob: tftestutil.NewTFJobWithCleanupJobDelay(1, 2, 0, nil),
+			runPolicy: &kubeflowv1.RunPolicy{
+				TTLSecondsAfterFinished: nil,
+			},
+			jobStatus:          kubeflowv1.JobStatus{},
+			wantTFJobIsRemoved: false,
+			wantErr:            false,
+		}),
+		Entry("No error with completionTime is nil if suspended", &cleanUpCases{
+			tfJob: tftestutil.NewTFJobWithCleanupJobDelay(1, 2, 0, nil),
+			runPolicy: &kubeflowv1.RunPolicy{
+				TTLSecondsAfterFinished: nil,
+				Suspend:                 ptr.To(true),
+			},
+			jobStatus: kubeflowv1.JobStatus{
+				CompletionTime: nil,
+			},
+			wantTFJobIsRemoved: false,
+			wantErr:            false,
+		}),
+		Entry("No error with TTL is set and completionTime is nil, if suspended", &cleanUpCases{
+			tfJob: tftestutil.NewTFJobWithCleanupJobDelay(1, 2, 0, ptr.To[int32](10)),
+			runPolicy: &kubeflowv1.RunPolicy{
+				TTLSecondsAfterFinished: ptr.To[int32](10),
+				Suspend:                 ptr.To(true),
+			},
+			jobStatus: kubeflowv1.JobStatus{
+				CompletionTime: nil,
+			},
+			wantTFJobIsRemoved: false,
+			wantErr:            false,
+		}),
+		Entry("Error is occurred since completionTime is nil", &cleanUpCases{
+			tfJob: tftestutil.NewTFJobWithCleanupJobDelay(1, 2, 0, ptr.To[int32](10)),
+			runPolicy: &kubeflowv1.RunPolicy{
+				TTLSecondsAfterFinished: ptr.To[int32](10),
+			},
+			jobStatus: kubeflowv1.JobStatus{
+				CompletionTime: nil,
+			},
+			wantTFJobIsRemoved: false,
+			wantErr:            true,
+		}),
+		Entry("TFJob is removed since exceeded TTL (TTL is 180s)", &cleanUpCases{
+			tfJob: tftestutil.NewTFJobWithCleanupJobDelay(1, 2, 0, ptr.To[int32](180)),
+			runPolicy: &kubeflowv1.RunPolicy{
+				TTLSecondsAfterFinished: ptr.To[int32](180),
+			},
+			jobStatus: kubeflowv1.JobStatus{
+				CompletionTime: &metav1.Time{
+					Time: now.AddDate(0, 0, -1),
+				},
+			},
+			wantTFJobIsRemoved: true,
+			wantErr:            false,
+		}),
+		Entry("TFJob is removed since (TTL is 0s)", &cleanUpCases{
+			tfJob: tftestutil.NewTFJobWithCleanupJobDelay(1, 2, 0, ptr.To[int32](0)),
+			runPolicy: &kubeflowv1.RunPolicy{
+				TTLSecondsAfterFinished: ptr.To[int32](0),
+			},
+			jobStatus: kubeflowv1.JobStatus{
+				CompletionTime: &now,
+			},
+			wantTFJobIsRemoved: true,
+			wantErr:            false,
+		}),
+	)
+
+	type createServiceCases struct {
+		tfJob   *kubeflowv1.TFJob
+		rType   kubeflowv1.ReplicaType
+		spec    *kubeflowv1.ReplicaSpec
+		uid     types.UID
+		index   int
+		wantErr bool
+	}
+	DescribeTable("CreateNewService",
+		func(tc *createServiceCases) {
+			tc.tfJob.SetUID(tc.uid)
+			tc.tfJob.SetNamespace(ns.Name)
+
+			gotErr := reconciler.CreateNewService(tc.tfJob, tc.rType, tc.spec, strconv.Itoa(tc.index))
+			if tc.wantErr {
+				Expect(gotErr).ShouldNot(Succeed())
+			} else {
+				Expect(gotErr).Should(Succeed())
+
+				svcInternalTPC := corev1.ServiceInternalTrafficPolicyCluster
+				svcSingleStack := corev1.IPFamilyPolicySingleStack
+				wantSvc := &corev1.Service{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      fmt.Sprintf("%s-%s-%d", tc.tfJob.Name, tc.rType, tc.index),
+						Namespace: ns.Name,
+						OwnerReferences: []metav1.OwnerReference{
+							*reconciler.GenOwnerReference(tc.tfJob),
+						},
+						Labels: map[string]string{
+							kubeflowv1.JobNameLabel:      tc.tfJob.Name,
+							kubeflowv1.OperatorNameLabel: controllerName,
+							kubeflowv1.ReplicaIndexLabel: strconv.Itoa(tc.index),
+							kubeflowv1.ReplicaTypeLabel:  "",
+						},
+					},
+					Spec: corev1.ServiceSpec{
+						Ports: []corev1.ServicePort{
+							{
+								Name:     kubeflowv1.TFJobDefaultPortName,
+								Protocol: corev1.ProtocolTCP,
+								Port:     kubeflowv1.TFJobDefaultPort,
+								TargetPort: intstr.IntOrString{
+									IntVal: kubeflowv1.TFJobDefaultPort,
+								},
+							},
+						},
+						Selector: map[string]string{
+							kubeflowv1.JobNameLabel:      tc.tfJob.Name,
+							kubeflowv1.OperatorNameLabel: controllerName,
+							kubeflowv1.ReplicaIndexLabel: strconv.Itoa(tc.index),
+							kubeflowv1.ReplicaTypeLabel:  "",
+						},
+						ClusterIP:             corev1.ClusterIPNone,
+						Type:                  corev1.ServiceTypeClusterIP,
+						ClusterIPs:            []string{corev1.ClusterIPNone},
+						SessionAffinity:       corev1.ClusterIPNone,
+						IPFamilies:            []corev1.IPFamily{corev1.IPv4Protocol},
+						IPFamilyPolicy:        &svcSingleStack,
+						InternalTrafficPolicy: &svcInternalTPC,
+					},
+				}
+				Eventually(func() *corev1.Service {
+					svc := &corev1.Service{}
+					Expect(testK8sClient.Get(ctx, client.ObjectKeyFromObject(wantSvc), svc)).Should(Succeed())
+					return svc
+				}, testutil.Timeout, testutil.Interval).Should(BeComparableTo(wantSvc,
+					cmpopts.IgnoreFields(metav1.ObjectMeta{}, "UID", "ResourceVersion", "Generation", "CreationTimestamp", "ManagedFields")))
+			}
+		},
+		Entry("Failed to create service since containerPort is missing", &createServiceCases{
+			tfJob: tftestutil.NewTFJobV2(2, 0, 0, 1, 0),
+			spec: &kubeflowv1.ReplicaSpec{
+				Template: corev1.PodTemplateSpec{
+					Spec: corev1.PodSpec{
+						Containers: []corev1.Container{
+							{
+								Name: kubeflowv1.TFJobDefaultContainerName,
+							},
+						},
+					},
+				},
+			},
+			index:   0,
+			wantErr: true,
+		}),
+		Entry("Failed to create service since Job's ownerReference is invalid", &createServiceCases{
+			tfJob:   tftestutil.NewTFJobV2(2, 0, 0, 1, 0),
+			spec:    &kubeflowv1.ReplicaSpec{Template: tftestutil.NewTFReplicaSpecTemplate()},
+			index:   1,
+			wantErr: true,
+		}),
+		Entry("Succeeded to create service", &createServiceCases{
+			tfJob:   tftestutil.NewTFJobV2(2, 0, 0, 1, 0),
+			spec:    &kubeflowv1.ReplicaSpec{Template: tftestutil.NewTFReplicaSpecTemplate()},
+			index:   0,
+			wantErr: false,
+			uid:     uuid.NewUUID(),
+		}),
+	)
 })
