@@ -1,10 +1,13 @@
 approvers:
+  - andreyvelich
   - gaocegege
   - Jeffwan
   - johnugeorge
+  - tenzen-y
   - terrytangyuan
-  - zw0610
 reviewers:
+  - Electronic-Waste
   - jinchihe
   - kuizhiqing
-  - tenzen-y
+emeritus_approvers:
+  - zw0610
